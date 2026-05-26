@@ -72,25 +72,53 @@ async fn html_uploader_form() -> Html<&'static str> {
         <!doctype html>
         <html>
             <body>
-            	<button onclick="location.href='/'" type="button">Home</button>
-             		<form id="upload_form" enctype="multipart/form-data">                    <label>
+                <button onclick="location.href='/'" type="button">Home</button>
+                <form id="upload_form" enctype="multipart/form-data">
+                    <label>
                         Choose file to upload:
                         <input type="file" name="file_upload_field">
                     </label>
                     <button type="submit">Upload</button>
                 </form>
+                <progress id="progress" value="0" max="100"></progress>
                 <p id="status"></p>
                 <script>
-                	document.getElementById( 'upload_form' ).addEventListener( 'submit', async function( e ) {
-                 		e.preventDefault();
-                   		document.getElementById( 'status' ).textContent = 'Uploading...';
-                     	const response = await fetch( '/html_upload_processor', {
-                      		method: 'POST',
-                        	body: new FormData( this )
-                      } );
-                      const text = await response.text();
-                      document.getElementById( 'status' ).textContent = text;
-                 	} );
+                    document.getElementById('upload_form').addEventListener('submit', function(e) {
+                        e.preventDefault();
+
+                        const xhr = new XMLHttpRequest();
+
+                        let totalBytes = 0;
+                        let maxMbps = 0;
+                        let minMbps = Infinity;
+
+                        xhr.upload.onprogress = function(e) {
+                            if (e.lengthComputable) {
+                                totalBytes = e.total;
+                                const percent = Math.round((e.loaded / e.total) * 100);
+                                const elapsed = (Date.now() - startTime) / 1000;
+                                const mbps = e.loaded / elapsed / (1024 * 1024);
+                                if (mbps > maxMbps) maxMbps = mbps;
+                                if (mbps < minMbps) minMbps = mbps;
+                                document.getElementById('progress').value = percent;
+                                document.getElementById('status').textContent = percent + '% — ' + mbps.toFixed(2) + ' MB/s';
+                            }
+                        };
+
+                        xhr.onload = function() {
+                            const elapsed = (Date.now() - startTime) / 1000;
+                            const avgMbps = (totalBytes / elapsed / (1024 * 1024)).toFixed(2);
+                            document.getElementById('status').textContent =
+                                xhr.responseText +
+                                ' | avg: ' + avgMbps + ' MB/s' +
+                                ' | max: ' + maxMbps.toFixed(2) + ' MB/s' +
+                                ' | min: ' + minMbps.toFixed(2) + ' MB/s';
+                        };
+
+                        xhr.open('POST', '/html_upload_processor');
+                        const startTime = Date.now();
+                        xhr.send(new FormData(this));
+                    });
                 </script>
             </body>
         </html>
