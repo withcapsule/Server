@@ -115,36 +115,62 @@ async fn pong() -> Json<Value> {
 }
 
 
-async fn upload_file_2( file_name: String ) -> Result<String, ( StatusCode, String )> {
+async fn upload_file( parsed_field: Field<'_>) -> Result<String, ( StatusCode, String )> {
+	// this is now an Option<&str>
+	// this handles the `self` parameter and handles the success branch
+	// the failure branch results in the file_name becoming the set string
+	// don't forget to call to_string() at the end
+	let file_name = parsed_field
+							.file_name()
+							.unwrap_or( "__failure_upload_file()" )
+							.to_string();
 	let path = format!( "./uploads/temp/{}", file_name );
 
-	let file = File::create( path ).await;  // -> io::Result<File>
-
+	let file = File::create( path ).await; // io::Result<File>
 	// This function can be used to pass through a successful result while handling an error. - rust docs
-	// this is exactly what i was looking for from the previous git commit (see description)
-	// file.map_err
+	// this is exactly what was needed; a way to handle errors without stopping on Ok()
+	let _ = file.map_err( |error_message| {
+		return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() broke, error: {}", error_message ) );
+	} );
+
 
 	return Ok( file_name )
 }
 
-async fn upload_file( mut field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
-	let file_name = field.file_name().unwrap_or( "upload" ).to_string();
-	let path = format!( "./uploads/temp/{}", file_name );
+// async fn upload_file_2( file_name: String ) -> Result<String, ( StatusCode, String )> {
+// 	let path = format!( "./uploads/temp/{}", file_name );
 
-	let mut file = File::create( &path ).await.map_err( |e| {
-		( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to create file: {}", e ) )
-	})?;
+// 	let file = File::create( path ).await;  // -> io::Result<File>
 
-	while let Some( chunk ) = field.chunk().await.map_err( |e| {
-		( StatusCode::BAD_REQUEST, format!( "Failed to read chunk: {}", e ) )
-	})? {
-		file.write_all( &chunk ).await.map_err( |e| {
-			( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to write chunk: {}", e ) )
-		})?;
-	}
+// 	// This function can be used to pass through a successful result while handling an error. - rust docs
+// 	// this is exactly what i was looking for from the previous git commit (see description)
+// 	let _ = file.map_err( |error_message| {
+// 		return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to create file: {}", error_message ) )
+// 	} );
 
-	return Ok( file_name )
-}
+
+
+// 	return Ok( file_name )
+// }
+
+// async fn upload_file( mut field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
+// 	let file_name = field.file_name().unwrap_or( "upload" ).to_string();
+// 	let path = format!( "./uploads/temp/{}", file_name );
+
+// 	let mut file = File::create( &path ).await.map_err( |e| {
+// 		( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to create file: {}", e ) )
+// 	})?;
+
+// 	while let Some( chunk ) = field.chunk().await.map_err( |e| {
+// 		( StatusCode::BAD_REQUEST, format!( "Failed to read chunk: {}", e ) )
+// 	})? {
+// 		file.write_all( &chunk ).await.map_err( |e| {
+// 			( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to write chunk: {}", e ) )
+// 		})?;
+// 	}
+
+// 	return Ok( file_name )
+// }
 
 async fn download_file() {
 
@@ -202,13 +228,13 @@ async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 			// field.file_name().unwrap_or( "upload" ).to_string();
 
 
-			let file_name = match current_field.file_name() {
-				Some( file ) => file.to_string(),
-				None => "__failure".to_string()
-			};
+			// let file_name = match current_field.file_name() {
+			// 	Some( file ) => file.to_string(),
+			// 	None => "__failure".to_string()
+			// };
 
 
-			match upload_file_2( file_name ).await {
+			match upload_file( current_field ).await {
 				// upload file returns Result<String, (StatusCode, String)>
 				// so Ok() is literally just returning a formatted String
 				Ok( file_saved_as ) => {
@@ -226,6 +252,10 @@ async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 			}
 		}
 	}
+
+	Err(
+          ( StatusCode::BAD_REQUEST, "No file found in request".to_string() )
+      )
 }
 
 async fn html_download_processor() {
