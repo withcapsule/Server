@@ -14,6 +14,7 @@ use axum::{
      	Json
     },
     extract::{
+    	DefaultBodyLimit,
     	Multipart,
      	multipart::{
       		Field
@@ -143,9 +144,13 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 	// -> for each megabyte streamed in, just write it, then discard those MB from system RAM since they're on disk
 
 
+	let mut chunk_loops: u16 = 0;
+	let mut total_bytes: usize = 0;
+
 	loop {
 		let chunk_piece = parsed_field.chunk().await;      // Result<Option<Bytes>, MultipartError>
-		println!( "chunk loop" );
+		chunk_loops += 1;
+		println!( "chunk loop {}", chunk_loops );
 
 		// let Some( chunk ) = parsed_field.chunk().await;
 
@@ -167,16 +172,15 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 			None => break
 		};
 
-		println!("received {} bytes", bytes.len());
-
-		return Ok( format!( "Success, uploaded {} of {} bytes.", file_name, bytes.len() ) )
+		println!( "\treceived {} bytes", bytes.len() );
+		total_bytes += bytes.len();
+		println!( "\treceived {} total bytes", total_bytes );
 	}
 
+	println!( "received {} total bytes", total_bytes );
 
-
-	return Err(
-		( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() location 3 error" ) )
- 	);
+	return Ok( format!( "Success, uploaded {} of {} bytes.", file_name, total_bytes ) )
+	// return Err( ( StatusCode::OK, format!( "Success, uploaded {} of {} bytes.", file_name, total_bytes ) ) );
 }
 
 
@@ -302,6 +306,10 @@ async fn main() {
 
         .route("/", get( main_menu ) )
 
+        // 1 byte * 1024 = 1 KiB
+        // 1 KiB * 1024 = 1 MiB
+        // 1 MiB * 32 = 32 MiB
+        .layer( DefaultBodyLimit::max( 1 * 1024 * 1024 * 32 ) )
         .layer( CORS );
 
     let listener = TcpListener::bind( "0.0.0.0:9001" ).await.unwrap();
