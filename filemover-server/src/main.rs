@@ -23,6 +23,9 @@ use axum::{
 };
 
 use tokio::{
+    io::{
+        AsyncWriteExt
+    },
 	fs::{
 		File,
 		create_dir_all,
@@ -126,7 +129,7 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 	// 	return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() location 1 error: {}", error_message ) );
 	// } );
 
-	let file_fd = match file {
+	let mut file_fd = match file {
 		Err( error_msg ) => {
 			return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() location 1 error: {}", error_msg ) ) )
 		}
@@ -145,6 +148,7 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 
 	let mut chunk_loops: u16 = 0;
 	let mut total_bytes: usize = 0;
+    let mut total_bytes_written: usize = 0;
 
 	loop {
 		let chunk_piece = parsed_field.chunk().await;      // Result<Option<Bytes>, MultipartError>
@@ -170,7 +174,15 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 		};
 
 		println!( "\treceived {} bytes", bytes.len() );
+        println!( "\twriting {} bytes...", bytes.len() );
+
+        let written = file_fd.write_all( &bytes ).await;
+        let _ = written.map_err( |error_message| {
+            return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "writing error: {}", error_message ) );
+        } );
+
 		total_bytes += bytes.len();
+        
 		println!( "\treceived {} total bytes", total_bytes );
 	}
 
