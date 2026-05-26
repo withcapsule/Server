@@ -22,11 +22,10 @@ use axum::{
 };
 
 use std::{
-	fs::{
+	fmt::format, fs::{
 		self,
 		OpenOptions,
-	},
-	io::{
+	}, io::{
 		Read,
 		Seek,
 		SeekFrom,
@@ -146,6 +145,7 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 
 	loop {
 		let chunk_piece = parsed_field.chunk().await;      // Result<Option<Bytes>, MultipartError>
+		println!( "chunk loop" );
 
 		// let Some( chunk ) = parsed_field.chunk().await;
 
@@ -168,6 +168,8 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 		};
 
 		println!("received {} bytes", bytes.len());
+
+		return Ok( format!( "Success, uploaded {} of {} bytes.", file_name, bytes.len() ) )
 	}
 
 
