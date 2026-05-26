@@ -122,9 +122,16 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 
 	// This function can be used to pass through a successful result while handling an error. - rust docs
 	// this is exactly what was needed; a way to handle errors without stopping on Ok()
-	let _ = file.map_err( |error_message| {
-		return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() location 1 error: {}", error_message ) );
-	} );
+	// let _ = file.map_err( |error_message| {
+	// 	return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() location 1 error: {}", error_message ) );
+	// } );
+
+	let file_fd = match file {
+		Err( error_msg ) => {
+			return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() location 1 error: {}", error_msg ) ) )
+		}
+		Ok( filefd ) => filefd
+	};
 
 	// at this point, a file has been created, and it needs to be written to
 	// ideally, chunking is the best method
