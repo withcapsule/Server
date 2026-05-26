@@ -22,24 +22,11 @@ use axum::{
     }
 };
 
-use std::{
-	fmt::format, fs::{
-		self,
-		OpenOptions,
-	}, io::{
-		Read,
-		Seek,
-		SeekFrom,
-		Write
-	}
-};
-
 use tokio::{
 	fs::{
 		File,
 		create_dir_all,
 	},
-	io::AsyncWriteExt,
 	net::{
 		TcpListener
 	}
@@ -288,15 +275,8 @@ async fn html_download_processor() {
 async fn main() {
 	create_dir_all( "./uploads/temp" ).await.unwrap();
 
-	let CORS = CorsLayer::new()
-		.allow_origin( "http://localhost:3000".parse::<HeaderValue>().unwrap() )
-		.allow_methods( [ Method::GET, Method::POST ] );
-
     let app: Router<> = Router::new()
         .route( "/ping", get( pong ) )
-
-        // .route( "/upload", post( upload_file )  )
-        .route( "/download", get( download_file ) )
 
         .route( "/html_uploader_form", get( html_uploader_form ) )
         .route( "/html_upload_processor", post( html_upload_processor ) )
@@ -310,7 +290,11 @@ async fn main() {
         // 1 KiB * 1024 = 1 MiB
         // 1 MiB * 32 = 32 MiB
         .layer( DefaultBodyLimit::max( 1 * 1024 * 1024 * 32 ) )
-        .layer( CORS );
+        .layer(
+        	CorsLayer::new()
+         		.allow_origin( "http://localhost:3000".parse::<HeaderValue>().unwrap() )
+           		.allow_methods( [ Method::GET, Method::POST ] )
+        );
 
     let listener = TcpListener::bind( "0.0.0.0:9001" ).await.unwrap();
     axum::serve( listener, app ).await.unwrap();
