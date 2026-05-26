@@ -14,7 +14,10 @@ use axum::{
      	Json
     },
     extract::{
-    	Multipart
+    	Multipart,
+     	multipart::{
+      		Field
+      	}
     }
 };
 
@@ -42,14 +45,81 @@ use tokio::{
 	}
 };
 
-use serde_json::{json, Value};
-use tower_http::cors::CorsLayer;
+use serde_json::{
+	json,
+	Value
+};
 
-async fn ping() -> Json<Value> {
+use tower_http::{
+	cors::{
+		CorsLayer
+	}
+};
+
+
+async fn main_menu() -> Html<&'static str> {
+	Html( r#"
+        <!doctype html>
+        <html>
+            <body>
+            	<div>
+               		<button onclick="location.href='/html_uploader_form'" type="button">Upload File</button>
+               		<button onclick="location.href='/html_downloader_form'" type="button">Download File</button>
+             	</div>
+            </body>
+        </html>
+    "#
+	)
+}
+
+async fn html_uploader_form() -> Html<&'static str> {
+	Html( r#"
+        <!doctype html>
+        <html>
+            <body>
+            	<button onclick="location.href='/'" type="button">Home</button>
+                <form action="/html_upload_processor" method="post" enctype="multipart/form-data">
+                    <label>
+                        Choose file to upload:
+                        <input type="file" name="file_upload_field">
+                    </label>
+                    <button type="submit">Upload</button>
+                </form>
+            </body>
+        </html>
+    "#
+	)
+}
+
+async fn html_downloader_form() -> Html<&'static str> {
+	Html( r#"
+        <!doctype html>
+        <html>
+            <body>
+            	<button onclick="location.href='/'" type="button">Home</button>
+                <form action="/html_download_processor" method="get" enctype="multipart/form-data">
+                    <label>
+                        Enter file download key or file link:
+                        <input type="text" name="file_download_field">
+                    </label>
+                    <button type="submit">Download</button>
+                </form>
+            </body>
+        </html>
+    "#
+	)
+}
+
+async fn pong() -> Json<Value> {
 	return Json( json!( { "message": "pong" } ) )
 }
 
-async fn upload_file( mut field: axum::extract::multipart::Field<'_> ) -> Result<String, ( StatusCode, String )> {
+
+async fn upload_file_2( file_name: String ) {
+
+}
+
+async fn upload_file( mut field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
 	let file_name = field.file_name().unwrap_or( "upload" ).to_string();
 	let path = format!( "./uploads/temp/{}", file_name );
 
@@ -72,57 +142,68 @@ async fn download_file() {
 
 }
 
-async fn upload_gui() -> Html<&'static str> {
-	Html( r#"
-        <!doctype html>
-        <html>
-            <body>
-                <form action="/upload" method="post" enctype="multipart/form-data">
-                    <label>
-                        Choose file to upload:
-                        <input type="file" name="file">
-                    </label>
-                    <button type="submit">Upload</button>
-                </form>
-            </body>
-        </html>
-    "#
-	)
-}
 
-async fn upload_gui_handler(mut part: Multipart) -> Result<String, (StatusCode, String)> {
+
+async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
 	loop {
-		let stream_result = part.next_field().await;
+		// begin looking at the next part of an HTML form that was submitted
+		let parts_of_html_form = part.next_field().await;  // returns Result<Option<Field>>
 
-		let opt_field = match stream_result {
+		// this looks through Result<Option<Field>>
+		// and unwraps it to just Option<Field>
+		// Result<> here means that the form was either successfully moved ahead or it failed due to some error
+		let current_part = match parts_of_html_form {
+			// error in the form, so return an error
 			Err( error ) => {
 				return Err(
 					( StatusCode::BAD_REQUEST, format!( "Multipart Error: {}", error ) )
 			 	);
 			}
 
-			Ok( option ) => {
+			// the form's next field was successfully found and it is stored as found_next_form_part
+			// this section evaluates to found_next_form_part
+			// so the value of current_part becomes found_next_form_part
+			Ok( found_next_form_part ) => {
 				// ok no semicolon here because that apparently discards the value of the evaluated line
 				// expected (), found Option<{unknown}> (rust-analyzer E0308)
 				// fixed ^^ error on the next few lines
-				option
+				found_next_form_part
 			}
 		};
 
-		let field = match opt_field {
-			Some( found_field ) => found_field,
+		// now since HTML can have many parts in forms, this checks if the part is a field
+		// current_part is currently Option<Field>, so it cannot be worked with directly yet
+		// it needs to be unwrapped. Either it exists as Some() or doesn't exist, which means None
+		let current_field = match current_part {
+			// if any HTML field was found, unwrap Option<Field> to Field
+			Some( found_a_field ) => found_a_field,
+			// otherwise break out, because if we're here, that means that next_field from above
+			// returned a None, indicating that the HTML form has nothing left in it and the end has been hit
 			None => break,
 		};
 
-		let field_name = field.name().unwrap_or( "unknown" ).to_string();
+		// get the name of the current field to check if it's the right one
+		// unwrap is dangerous as it can panic crash, so unwrap_or is safer
+		// .name() returns Option<&str>, so either it comes back as Some or None
+		let current_field_name = current_field.name().unwrap_or( "unknown" ).to_string();
 
-		if field_name == "file" {
-			match upload_file( field ).await {
-				Ok( saved_file_as ) => {
-					return Ok( format!( "File uploaded and saved as: {}", saved_file_as ) );
+		// parse the html form until a field named "file" is found as that's what the name is set to in HTML
+		// in that will be the file that the user is uploading
+		if current_field_name == "file_upload_field" {
+			// run the upload_file function and await the result
+			// field.file_name().unwrap_or( "upload" ).to_string();
+
+			match upload_file( current_field ).await {
+				// upload file returns Result<String, (StatusCode, String)>
+				// so Ok() is literally just returning a formatted String
+				Ok( file_saved_as ) => {
+					// returning Result<String>
+					return Ok( format!( "File uploaded and saved as: {}", file_saved_as ) );
 				}
 
+				// and error is returning a tuple which puts StatusCode and String together
 				Err( error_msg ) => {
+					// returning Result<(StatusCode, String)>
 					return Err(
 						( StatusCode::INTERNAL_SERVER_ERROR, format!( "File upload failed. Error: {:?}", error_msg ) )
 					);
@@ -136,6 +217,10 @@ async fn upload_gui_handler(mut part: Multipart) -> Result<String, (StatusCode, 
  	)
 }
 
+async fn html_download_processor() {
+
+}
+
 
 #[tokio::main]
 async fn main() {
@@ -146,11 +231,20 @@ async fn main() {
 		.allow_methods( [ Method::GET, Method::POST ] );
 
     let app: Router<> = Router::new()
-        .route( "/upload", post( upload_gui_handler )  )
+        .route( "/ping", get( pong ) )
+
+        // .route( "/upload", post( upload_file )  )
         .route( "/download", get( download_file ) )
-        .route( "/upload_gui", get( upload_gui ) )
-    	.route("/", get( ping ) )
-     	.layer( CORS );
+
+        .route( "/html_uploader_form", get( html_uploader_form ) )
+        .route( "/html_upload_processor", post( html_upload_processor ) )
+
+        .route( "/html_downloader_form", get( html_downloader_form ) )
+        .route( "/html_download_processor", post( html_download_processor ) )
+
+        .route("/", get( main_menu ) )
+
+        .layer( CORS );
 
     let listener = TcpListener::bind( "0.0.0.0:9001" ).await.unwrap();
     axum::serve( listener, app ).await.unwrap();
