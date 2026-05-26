@@ -49,9 +49,46 @@ async fn ping() -> Json<Value> {
 }
 
 async fn upload_file( mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
-	while let Some( field ) = part.next_field().await.map_err( | err | {
-		(StatusCode::BAD_REQUEST, format!( "Multipart Error: {}", err ) )
-	} )
+	loop {
+		let stream_result = part.next_field().await;
+
+		let opt_field = match stream_result {
+			Err( error ) => {
+				return Err(
+					( StatusCode::BAD_REQUEST, format!( "Multipart Error: {}", error ) )
+			 	);
+			}
+
+			Ok( option ) => {
+				option;
+			}
+		};
+
+		let field = match opt_field {
+			Some( found_field ) => found_field,
+			None => break,
+		};
+
+		let field_name = field.name().unwrap_or( "unknown" ).to_string();
+
+		if field_name == "file" {
+			match upload_file( field ).await {
+				Ok( saved_file_as ) => {
+					return Ok( format!( "File uploaded and saved as: {}", saved_file_as ) );
+				}
+
+				Err( error_msg ) => {
+					return Err(
+						( StatusCode::INTERNAL_SERVER_ERROR, format!( "File upload failed. Error: {}", error_msg ) )
+					);
+				}
+			}
+		}
+	}
+
+	Err(
+		( StatusCode::BAD_REQUEST, "No file found in request".to_string() )
+ 	)
 }
 
 async fn download_file() {
