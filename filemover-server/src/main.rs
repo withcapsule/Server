@@ -119,10 +119,10 @@ async fn upload_file_2( file_name: String ) -> Result<String, ( StatusCode, Stri
 	let path = format!( "./uploads/temp/{}", file_name );
 
 	let file = File::create( path ).await;  // -> io::Result<File>
-	match file {
-		Err( error_msg ) => (StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to write: {}", error_msg )),
-		Ok( _ ) => (StatusCode::CREATED, format!( "File created {}", file_name ) ),
-	};
+
+	// This function can be used to pass through a successful result while handling an error. - rust docs
+	// this is exactly what i was looking for from the previous git commit (see description)
+	file.map_err
 
 	return Ok( file_name )
 }
