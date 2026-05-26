@@ -109,8 +109,13 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 	// don't forget to call to_string() at the end
 	let file_name = parsed_field
 							.file_name()
-							.unwrap_or( "__failure_upload_file()" )
+							.unwrap_or( "__failure_upload_file()__" )
 							.to_string();
+
+	if file_name == "" || file_name == "__failure_upload_file()__" {
+		return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
+	}
+
 	let path = format!( "./uploads/temp/{}", file_name );
 
 	let file = File::create( path ).await; // io::Result<File>
@@ -166,7 +171,7 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 
 	println!( "received {} total bytes", total_bytes );
 
-	return Ok( format!( "Success, uploaded {} of {} bytes.", file_name, total_bytes ) )
+	return Ok( format!( "Success, uploaded {} of {} bytes.\n", file_name, total_bytes ) )
 	// return Err( ( StatusCode::OK, format!( "Success, uploaded {} of {} bytes.", file_name, total_bytes ) ) );
 }
 
@@ -184,7 +189,43 @@ async fn download_file() {
 
 }
 
+async fn curl_upload_processor( mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+	// example:
+	// curl -X POST http://localhost:9001/curlup -F 'f=@mydocument.txt'
 
+	loop {
+		let parts_of_curl = part.next_field().await;  // Result<Option<Field<'_>>, MultipartError>
+
+		// now becomes Option<Field<'_>>
+		let current_part = match parts_of_curl {
+			Err( error ) => {
+				return Err( ( StatusCode::BAD_REQUEST, format!( "curl error location 1: {}\n", error ) ) );
+			}
+
+			Ok( part_found ) => part_found
+		};
+
+		let field = match current_part {
+			Some( inner_field ) => inner_field,
+			None => break
+		};
+
+		let field_name = field.name().unwrap_or( "unknown" ).to_string();
+
+		if field_name == "f" {
+			match upload_file( field ).await {
+				Err( error_message ) => {
+					return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "curl error location 2: {:?}\n", error_message ) ) );
+				}
+				Ok( message_from_uploader ) => {
+					return Ok( message_from_uploader )
+				}
+			}
+		}
+	}
+
+	return Err(( StatusCode::BAD_REQUEST, "No file found in request".to_string() ));
+}
 
 async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
 	loop {
@@ -245,9 +286,9 @@ async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 			match upload_file( current_field ).await {
 				// upload file returns Result<String, (StatusCode, String)>
 				// so Ok() is literally just returning a formatted String
-				Ok( file_saved_as ) => {
+				Ok( message_from_uploader ) => {
 					// returning Result<String>
-					return Ok( format!( "File uploaded and saved as: {}", file_saved_as ) );
+					return Ok( message_from_uploader );
 				}
 
 				// and error is returning a tuple which puts StatusCode and String together
@@ -261,9 +302,7 @@ async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 		}
 	}
 
-	Err(
-          ( StatusCode::BAD_REQUEST, "No file found in request".to_string() )
-      )
+	return Err(( StatusCode::BAD_REQUEST, "No file found in request".to_string() ));
 }
 
 async fn html_download_processor() {
@@ -277,6 +316,8 @@ async fn main() {
 
     let app: Router<> = Router::new()
         .route( "/ping", get( pong ) )
+
+        .route( "/curlup", post( curl_upload_processor ) )
 
         .route( "/html_uploader_form", get( html_uploader_form ) )
         .route( "/html_upload_processor", post( html_upload_processor ) )
