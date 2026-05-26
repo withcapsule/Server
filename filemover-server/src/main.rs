@@ -115,7 +115,7 @@ async fn pong() -> Json<Value> {
 }
 
 
-async fn upload_file( parsed_field: Field<'_>) -> Result<String, ( StatusCode, String )> {
+async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCode, String )> {
 	// this is now an Option<&str>
 	// this handles the `self` parameter and handles the success branch
 	// the failure branch results in the file_name becoming the set string
@@ -127,39 +127,63 @@ async fn upload_file( parsed_field: Field<'_>) -> Result<String, ( StatusCode, S
 	let path = format!( "./uploads/temp/{}", file_name );
 
 	let file = File::create( path ).await; // io::Result<File>
+
 	// This function can be used to pass through a successful result while handling an error. - rust docs
 	// this is exactly what was needed; a way to handle errors without stopping on Ok()
 	let _ = file.map_err( |error_message| {
-		return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() broke, error: {}", error_message ) );
+		return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() location 1 error: {}", error_message ) );
 	} );
 
+	// at this point, a file has been created, and it needs to be written to
+	// ideally, chunking is the best method
+	//
+	// explanantion:
+	// 100 MB file, 1 MB/s connection
+	// -> wait for entire 100 MB to reach server, 100 seconds, and only written when fully received
+	// OR
+	// -> for each megabyte streamed in, just write it, then discard those MB from system RAM since they're on disk
 
-	return Ok( file_name )
+
+	loop {
+		let chunk_piece = parsed_field.chunk().await;      // Result<Option<Bytes>, MultipartError>
+
+		// let Some( chunk ) = parsed_field.chunk().await;
+
+		// chunk_piece is a Result<Option<Bytes>, MultipartError>
+		let chunk = match chunk_piece {
+			Err( error ) => {
+				return Err(
+					( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() location 2 error: {}", error ) )
+			 	);
+			},
+			Ok( inner_option_and_bytes ) => {
+				inner_option_and_bytes
+			}
+		};
+
+		// chunk is now Option<Bytes>
+		let bytes = match chunk {
+			Some( bytes ) => bytes,
+			None => break
+		};
+
+		// let _ = chunk_piece.map_err( | error_message | {
+		// 	return ( StatusCode::BAD_REQUEST, error_message.to_string() )
+		// } );
+
+		// // chunk_piece is a Result<Option<Bytes>, MultipartError>
+		// let chunk = chunk_piece.unwrap_or( 0 );
+
+		println!("received {} bytes", bytes.len());
+	}
+
+
+
+	return Err(
+		( StatusCode::INTERNAL_SERVER_ERROR, format!( "upload_file() location 3 error" ) )
+ 	);
 }
 
-// async fn upload_file_2( file_name: String ) -> Result<String, ( StatusCode, String )> {
-// 	let path = format!( "./uploads/temp/{}", file_name );
-
-// 	let file = File::create( path ).await;  // -> io::Result<File>
-
-// 	// This function can be used to pass through a successful result while handling an error. - rust docs
-// 	// this is exactly what i was looking for from the previous git commit (see description)
-// 	let _ = file.map_err( |error_message| {
-// 		return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to create file: {}", error_message ) )
-// 	} );
-
-
-
-// 	return Ok( file_name )
-// }
-
-// async fn upload_file( mut field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
-// 	let file_name = field.file_name().unwrap_or( "upload" ).to_string();
-// 	let path = format!( "./uploads/temp/{}", file_name );
-
-// 	let mut file = File::create( &path ).await.map_err( |e| {
-// 		( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to create file: {}", e ) )
-// 	})?;
 
 // 	while let Some( chunk ) = field.chunk().await.map_err( |e| {
 // 		( StatusCode::BAD_REQUEST, format!( "Failed to read chunk: {}", e ) )
@@ -169,8 +193,6 @@ async fn upload_file( parsed_field: Field<'_>) -> Result<String, ( StatusCode, S
 // 		})?;
 // 	}
 
-// 	return Ok( file_name )
-// }
 
 async fn download_file() {
 
