@@ -115,8 +115,16 @@ async fn pong() -> Json<Value> {
 }
 
 
-async fn upload_file_2( file_name: String ) {
+async fn upload_file_2( file_name: String ) -> Result<String, ( StatusCode, String )> {
+	let path = format!( "./uploads/temp/{}", file_name );
 
+	let file = File::create( path ).await;  // -> io::Result<File>
+	match file {
+		Err( error_msg ) => (StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to write: {}", error_msg )),
+		Ok( _ ) => (StatusCode::CREATED, format!( "File created {}", file_name ) ),
+	};
+
+	return Ok( file_name )
 }
 
 async fn upload_file( mut field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
@@ -135,7 +143,7 @@ async fn upload_file( mut field: Field<'_> ) -> Result<String, ( StatusCode, Str
 		})?;
 	}
 
-	Ok( file_name )
+	return Ok( file_name )
 }
 
 async fn download_file() {
@@ -193,7 +201,14 @@ async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 			// run the upload_file function and await the result
 			// field.file_name().unwrap_or( "upload" ).to_string();
 
-			match upload_file( current_field ).await {
+
+			let file_name = match current_field.file_name() {
+				Some( file ) => file.to_string(),
+				None => "__failure".to_string()
+			};
+
+
+			match upload_file_2( file_name ).await {
 				// upload file returns Result<String, (StatusCode, String)>
 				// so Ok() is literally just returning a formatted String
 				Ok( file_saved_as ) => {
