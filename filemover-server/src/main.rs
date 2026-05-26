@@ -44,6 +44,11 @@ use tower_http::{
 };
 
 
+
+async fn pong() -> Json<Value> {
+	return Json( json!( { "message": "pong" } ) )
+}
+
 async fn main_menu() -> Html<&'static str> {
 	Html( r#"
         <!doctype html>
@@ -97,11 +102,6 @@ async fn html_downloader_form() -> Html<&'static str> {
 	)
 }
 
-async fn pong() -> Json<Value> {
-	return Json( json!( { "message": "pong" } ) )
-}
-
-
 async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCode, String )> {
 	// this is now an Option<&str>
 	// this handles the `self` parameter and handles the success branch
@@ -139,12 +139,20 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 	let mut chunk_loops: u16 = 0;
 	let mut total_bytes: usize = 0;
 
+	// 	while let Some( chunk ) = field.chunk().await.map_err( |e| {
+	// 		( StatusCode::BAD_REQUEST, format!( "Failed to read chunk: {}", e ) )
+	// 	})? {
+	// 		file.write_all( &chunk ).await.map_err( |e| {
+	// 			( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to write chunk: {}", e ) )
+	// 		})?;
+	// 	}
+
+
+
 	loop {
 		let chunk_piece = parsed_field.chunk().await;      // Result<Option<Bytes>, MultipartError>
 		chunk_loops += 1;
 		println!( "chunk loop {}", chunk_loops );
-
-		// let Some( chunk ) = parsed_field.chunk().await;
 
 		// chunk_piece is a Result<Option<Bytes>, MultipartError>
 		let chunk = match chunk_piece {
@@ -172,17 +180,9 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 	println!( "received {} total bytes", total_bytes );
 
 	return Ok( format!( "Success, uploaded {} of {} bytes.\n", file_name, total_bytes ) )
-	// return Err( ( StatusCode::OK, format!( "Success, uploaded {} of {} bytes.", file_name, total_bytes ) ) );
 }
 
 
-// 	while let Some( chunk ) = field.chunk().await.map_err( |e| {
-// 		( StatusCode::BAD_REQUEST, format!( "Failed to read chunk: {}", e ) )
-// 	})? {
-// 		file.write_all( &chunk ).await.map_err( |e| {
-// 			( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to write chunk: {}", e ) )
-// 		})?;
-// 	}
 
 
 async fn download_file() {
