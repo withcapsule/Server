@@ -33,8 +33,8 @@ async fn ping() -> Json<Value> {
 	return Json( json!( { "message": "pong" } ) )
 }
 
-async fn upload_file() {
-
+async fn upload_file( mut part: Part ) {
+	let mut file_name = String::new();
 }
 
 async fn download_file() {
