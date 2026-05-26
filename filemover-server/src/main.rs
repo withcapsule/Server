@@ -139,16 +139,6 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 	let mut chunk_loops: u16 = 0;
 	let mut total_bytes: usize = 0;
 
-	// 	while let Some( chunk ) = field.chunk().await.map_err( |e| {
-	// 		( StatusCode::BAD_REQUEST, format!( "Failed to read chunk: {}", e ) )
-	// 	})? {
-	// 		file.write_all( &chunk ).await.map_err( |e| {
-	// 			( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to write chunk: {}", e ) )
-	// 		})?;
-	// 	}
-
-
-
 	loop {
 		let chunk_piece = parsed_field.chunk().await;      // Result<Option<Bytes>, MultipartError>
 		chunk_loops += 1;
@@ -273,16 +263,6 @@ async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 		// parse the html form until a field named "file" is found as that's what the name is set to in HTML
 		// in that will be the file that the user is uploading
 		if current_field_name == "file_upload_field" {
-			// run the upload_file function and await the result
-			// field.file_name().unwrap_or( "upload" ).to_string();
-
-
-			// let file_name = match current_field.file_name() {
-			// 	Some( file ) => file.to_string(),
-			// 	None => "__failure".to_string()
-			// };
-
-
 			match upload_file( current_field ).await {
 				// upload file returns Result<String, (StatusCode, String)>
 				// so Ok() is literally just returning a formatted String
