@@ -73,13 +73,25 @@ async fn html_uploader_form() -> Html<&'static str> {
         <html>
             <body>
             	<button onclick="location.href='/'" type="button">Home</button>
-                <form action="/html_upload_processor" method="post" enctype="multipart/form-data">
-                    <label>
+             		<form id="upload_form" enctype="multipart/form-data">                    <label>
                         Choose file to upload:
                         <input type="file" name="file_upload_field">
                     </label>
                     <button type="submit">Upload</button>
                 </form>
+                <p id="status"></p>
+                <script>
+                	document.getElementById( 'upload_form' ).addEventListener( 'submit', async function( e ) {
+                 		e.preventDefault();
+                   		document.getElementById( 'status' ).textContent = 'Uploading...';
+                     	const response = await fetch( '/html_upload_processor', {
+                      		method: 'POST',
+                        	body: new FormData( this )
+                      } );
+                      const text = await response.text();
+                      document.getElementById( 'status' ).textContent = text;
+                 	} );
+                </script>
             </body>
         </html>
     "#
@@ -331,7 +343,7 @@ async fn main() {
         // 1 byte * 1024 = 1 KiB
         // 1 KiB * 1024 = 1 MiB
         // 1 MiB * 32 = 32 MiB
-        .layer( DefaultBodyLimit::max( 1 * 1024 * 1024 * 32 ) )
+        .layer( DefaultBodyLimit::max( 1 * 1024 * 1024 * 256 ) )
         .layer(
         	CorsLayer::new()
          		.allow_origin( "http://localhost:3000".parse::<HeaderValue>().unwrap() )
