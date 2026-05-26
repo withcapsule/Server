@@ -122,7 +122,7 @@ async fn upload_file_2( file_name: String ) -> Result<String, ( StatusCode, Stri
 
 	// This function can be used to pass through a successful result while handling an error. - rust docs
 	// this is exactly what i was looking for from the previous git commit (see description)
-	file.map_err
+	// file.map_err
 
 	return Ok( file_name )
 }
@@ -226,10 +226,6 @@ async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 			}
 		}
 	}
-
-	Err(
-		( StatusCode::BAD_REQUEST, "No file found in request".to_string() )
- 	)
 }
 
 async fn html_download_processor() {
