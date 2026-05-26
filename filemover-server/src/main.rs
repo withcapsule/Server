@@ -153,7 +153,7 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 	loop {
 		let chunk_piece = parsed_field.chunk().await;      // Result<Option<Bytes>, MultipartError>
 		chunk_loops += 1;
-		println!( "chunk loop {}", chunk_loops );
+		// println!( "chunk loop {}", chunk_loops );
 
 		// chunk_piece is a Result<Option<Bytes>, MultipartError>
 		let chunk = match chunk_piece {
@@ -173,8 +173,8 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 			None => break
 		};
 
-		println!( "\treceived {} bytes", bytes.len() );
-        println!( "\twriting {} bytes...", bytes.len() );
+		// println!( "\treceived {} bytes", bytes.len() );
+        // println!( "\twriting {} bytes...", bytes.len() );
 
         let written = file_fd.write_all( &bytes ).await;
         let _ = written.map_err( |error_message| {
@@ -182,11 +182,13 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
         } );
 
 		total_bytes += bytes.len();
-        
-		println!( "\treceived {} total bytes", total_bytes );
+		total_bytes_written += bytes.len();
+
+		// println!( "\treceived {} total bytes", total_bytes );
 	}
 
-	println!( "received {} total bytes", total_bytes );
+	println!( "{} bytes received over {} chunks", total_bytes, chunk_loops - 1 );
+	println!( "{} bytes written", total_bytes_written );
 
 	return Ok( format!( "Success, uploaded {} of {} bytes.\n", file_name, total_bytes ) )
 }
