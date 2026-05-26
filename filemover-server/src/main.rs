@@ -167,13 +167,6 @@ async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCod
 			None => break
 		};
 
-		// let _ = chunk_piece.map_err( | error_message | {
-		// 	return ( StatusCode::BAD_REQUEST, error_message.to_string() )
-		// } );
-
-		// // chunk_piece is a Result<Option<Bytes>, MultipartError>
-		// let chunk = chunk_piece.unwrap_or( 0 );
-
 		println!("received {} bytes", bytes.len());
 	}
 
