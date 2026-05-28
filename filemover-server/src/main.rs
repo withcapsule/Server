@@ -32,6 +32,7 @@ use axum::{
     }
 };
 
+use rand::RngExt;
 use tokio::{
     io::{
         AsyncWriteExt
@@ -169,7 +170,9 @@ async fn html_downloader_form() -> Html<&'static str> {
 	)
 }
 
-async fn upload_file( mut parsed_field: Field<'_>) -> Result<String, ( StatusCode, String )> {
+async fn upload_file( mut parsed_field: Field<'_>, file_id: i32 ) -> Result<String, ( StatusCode, String )> {
+	// DB contains ID, FileName, UploadTime
+
 	// this is now an Option<&str>
 	// this handles the `self` parameter and handles the success branch
 	// the failure branch results in the file_name becoming the set string
@@ -292,7 +295,9 @@ async fn curl_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 	return Err(( StatusCode::BAD_REQUEST, "No file found in request".to_string() ));
 }
 
-async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+async fn html_upload_processor( mut part: Multipart, State( state ): State<&AppState> ) -> Result<String, ( StatusCode, String )> {
+	let file_id: i32 = rand::rng().random_range( 0..=99999 );
+
 	loop {
 		// begin looking at the next part of an HTML form that was submitted
 		let parts_of_html_form = part.next_field().await;  // returns Result<Option<Field>>
@@ -338,7 +343,7 @@ async fn html_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 		// parse the html form until a field named "file" is found as that's what the name is set to in HTML
 		// in that will be the file that the user is uploading
 		if current_field_name == "file_upload_field" {
-			match upload_file( current_field ).await {
+			match upload_file( current_field, file_id ).await {
 				// upload file returns Result<String, (StatusCode, String)>
 				// so Ok() is literally just returning a formatted String
 				Ok( message_from_uploader ) => {
