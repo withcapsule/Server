@@ -152,13 +152,32 @@ async fn html_downloader_form() -> Html<&'static str> {
         <html>
             <body>
             	<button onclick="location.href='/'" type="button">Home</button>
-                <form action="/html_download_processor" method="post" enctype="multipart/form-data">
+                <form id="download_form" enctype="multipart/form-data">
                     <label>
                         Enter file download key or file link:
                         <input type="text" name="file_download_field">
                     </label>
                     <button type="submit">Download</button>
                 </form>
+                <p id="status"></p>
+                <script>
+                    document.getElementById('download_form').addEventListener('submit', function(e) {
+                        e.preventDefault();
+
+                        const xhr = new XMLHttpRequest();
+
+                        xhr.onload = function() {
+                            if (xhr.status === 200) {
+                                document.getElementById('status').textContent = 'File found: ' + xhr.responseText;
+                            } else {
+                                document.getElementById('status').textContent = 'Error: ' + xhr.responseText;
+                            }
+                        };
+
+                        xhr.open('POST', '/html_download_processor');
+                        xhr.send(new FormData(this));
+                    });
+                </script>
             </body>
         </html>
     "#
