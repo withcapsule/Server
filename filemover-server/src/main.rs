@@ -67,10 +67,7 @@ use sqlx::{
 		SqliteJournalMode::{
 			Wal
 		}
-	},
-	Sqlite,
-	Execute,
-	QueryBuilder
+	}
 };
 
 #[derive(Clone)]
@@ -118,6 +115,8 @@ async fn html_uploader_form() -> Html<&'static str> {
                 </form>
                 <progress id="progress" value="0" max="100"></progress>
                 <p id="status"></p>
+                <p id="statistics"></p>
+                <div id="statistics2" style="white-space: pre-line;"></div>
                 <script>
                     document.getElementById('upload_form').addEventListener('submit', function(e) {
                         e.preventDefault();
@@ -144,11 +143,12 @@ async fn html_uploader_form() -> Html<&'static str> {
                         xhr.onload = function() {
                             const elapsed = (Date.now() - startTime) / 1000;
                             const avgMbps = (totalBytes / elapsed / (1024 * 1024)).toFixed(2);
-                            document.getElementById('status').textContent =
-                                xhr.responseText +
-                                ' | avg: ' + avgMbps + ' MB/s' +
-                                ' | max: ' + maxMbps.toFixed(2) + ' MB/s' +
-                                ' | min: ' + minMbps.toFixed(2) + ' MB/s';
+                            document.getElementById( 'statistics' ).textContent = xhr.responseText;
+                            document.getElementById( 'statistics2' ).textContent =
+                            'Transfer Statistics: \n' +
+                            '- Avg: ' + avgMbps + ' MB/s \n' +
+                            '- Max: ' + maxMbps.toFixed(2) + ' MB/s \n' +
+                            '- Min: ' + minMbps.toFixed(2) + ' MB/s' ;
                         };
 
                         xhr.open('POST', '/html_upload_processor');
@@ -232,21 +232,24 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
     // sqlx::query( format!( "INSERT INTO filetable({})", file_id ) ).execute( &state.database );
 
     // from rust docs
-    let upload_time = match SystemTime::now().duration_since( SystemTime::UNIX_EPOCH ) {
+    let upload_time: u64 = match SystemTime::now().duration_since( SystemTime::UNIX_EPOCH ) {
         Ok( time ) => time.as_secs(),
         Err( error_message ) => panic!( "Critical system time issue, possibly before UNIX_EPOCH. Details: {}", error_message ),
     };
 
-    let mut insert_query: QueryBuilder<Sqlite> = QueryBuilder::new(
-    	"INSERT INTO filetable(ID, FileName, UploadTime) "
-    );
-
     println!( "1970-01-01 00:00:00 UTC was {} seconds ago!", upload_time );
 
-    insert_query.push_bind( format!( "VALUES ({}, {}, {})", file_id, file_name, upload_time ) );
+    let _= sqlx::query( "INSERT INTO filetable(ID, FileName, UploadTime) VALUES(?, ?, ?)" )
+        .bind( file_id )
+        .bind( &file_name )
+        .bind( upload_time as i64 )
+        .execute( &state.database )
+        .await
+        .map_err( |error_message| {
+        	( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to add to db, error: {}", error_message ) )
+        } );
 
-    let query = insert_query.build();
-    let _ = query.execute( &state.database ).await;
+
 
 	loop {
 		let chunk_piece = parsed_field.chunk().await;      // Result<Option<Bytes>, MultipartError>
@@ -279,7 +282,7 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 
 	println!( "{} bytes received over {} chunks", total_bytes_written, chunk_loops - 1 );
 
-	return Ok( format!( "Success, uploaded {} of {} bytes.\n", file_name, total_bytes_written ) )
+	return Ok( format!( "Success, uploaded {} of {} bytes. File ID for downloading is {}.\n", file_name, total_bytes_written, file_id ) )
 }
 
 
