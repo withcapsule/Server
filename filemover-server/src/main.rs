@@ -50,7 +50,7 @@ use tower_http::{
 };
 
 use sqlx::{
-	SqlitePool, sqlite::SqliteConnectOptions
+	SqlitePool, sqlite::{SqliteConnectOptions, SqliteJournalMode::Wal}
 };
 
 #[derive(Clone)]
@@ -354,17 +354,11 @@ async fn html_download_processor() {
 
 #[tokio::main]
 async fn main() {
-	let options = match SqliteConnectOptions::from_str( "sqlite:filemover.db" ) {
-		Ok( options ) => options,
-		Err( error_message ) => {
-			println!( "Failed to create db, error msg: {}", error_message );
-			exit( 1 );
-		}
-	};
-
-	options.create_if_missing( true );
-	options.journal_mode( sqlx::sqlite::SqliteJournalMode::Wal );
-	options.read_only( false );
+	let options = SqliteConnectOptions::from_str( "sqlite:filemover.db" )
+    	.expect( "Expected to create db, failed" )
+     	.create_if_missing( true )
+      	.journal_mode( Wal )
+       	.read_only( false );
 
 
 	let sqlite_db = SqlitePool::connect_with( options ).await;
