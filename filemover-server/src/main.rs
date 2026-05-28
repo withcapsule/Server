@@ -293,7 +293,7 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 async fn download_file( state: State<AppState>, parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
 	let id = match parsed_field.text().await {
 		Err( error_msg ) => {
-			return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "failed to do something, error: {}", error_msg ) ) );
+			return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Could not read the file ID you entered, error: {}", error_msg ) ) );
 		}
 		Ok( id ) => id
 	};
@@ -303,7 +303,7 @@ async fn download_file( state: State<AppState>, parsed_field: Field<'_> ) -> Res
         Err( error_message ) => { return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_message ) ) ); }
         Ok( res ) => match res {
 	        Some( found_res ) => found_res,
-	        None => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error 1 with file downloader." ) ) ); }
+	        None => { return Err( ( StatusCode::NOT_FOUND, format!( "No file with that ID exists." ) ) ); }
         }
     };
 
@@ -323,7 +323,7 @@ async fn download_file( state: State<AppState>, parsed_field: Field<'_> ) -> Res
 	if file_exists {
 		return Ok( format!( "File {} found!", file_name  ) );
 	} else {
-		return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error 2 with file downloader." ) ) );
+		return Err( ( StatusCode::NOT_FOUND, format!( "File record exists in database but the file is missing on disk." ) ) );
 	}
 }
 
@@ -467,7 +467,7 @@ async fn html_download_processor( state: State<AppState>, mut part: Multipart ) 
 		}
 	}
 
-	return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error with download form." ) ) );
+	return Err( ( StatusCode::BAD_REQUEST, format!( "No file ID field found in the download form." ) ) );
 }
 
 
