@@ -170,8 +170,9 @@ async fn html_downloader_form() -> Html<&'static str> {
 	)
 }
 
-async fn upload_file( mut parsed_field: Field<'_>, file_id: i32 ) -> Result<String, ( StatusCode, String )> {
+async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
 	// DB contains ID, FileName, UploadTime
+	let file_id: i32 = rand::rng().random_range( 0..=99999 );
 
 	// this is now an Option<&str>
 	// this handles the `self` parameter and handles the success branch
@@ -215,6 +216,9 @@ async fn upload_file( mut parsed_field: Field<'_>, file_id: i32 ) -> Result<Stri
 
 	let mut chunk_loops: u16 = 0;
     let mut total_bytes_written: usize = 0;
+
+    // TODO: ADD ERROR HANDLING
+    sqlx::query( "" ).execute( &state.database );
 
 	loop {
 		let chunk_piece = parsed_field.chunk().await;      // Result<Option<Bytes>, MultipartError>
@@ -283,7 +287,7 @@ async fn curl_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 		let field_name = field.name().unwrap_or( "unknown" ).to_string();
 
 		if field_name == "f" {
-			match upload_file( field, file_id ).await {
+			match upload_file( field ).await {
 				Err( error_message ) => {
 					return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "curl error location 2: {:?}\n", error_message ) ) );
 				}
@@ -298,8 +302,6 @@ async fn curl_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 }
 
 async fn html_upload_processor( State( state ): State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
-	let file_id: i32 = rand::rng().random_range( 0..=99999 );
-
 	loop {
 		// begin looking at the next part of an HTML form that was submitted
 		let parts_of_html_form = part.next_field().await;  // returns Result<Option<Field>>
@@ -345,7 +347,7 @@ async fn html_upload_processor( State( state ): State<AppState>, mut part: Multi
 		// parse the html form until a field named "file" is found as that's what the name is set to in HTML
 		// in that will be the file that the user is uploading
 		if current_field_name == "file_upload_field" {
-			match upload_file( current_field, file_id ).await {
+			match upload_file( current_field ).await {
 				// upload file returns Result<String, (StatusCode, String)>
 				// so Ok() is literally just returning a formatted String
 				Ok( message_from_uploader ) => {
