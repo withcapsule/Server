@@ -261,6 +261,8 @@ async fn curl_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 	// example:
 	// curl -X POST http://localhost:9001/curlup -F 'f=@mydocument.txt'
 
+	let file_id = rand::rng().random_range( 0..=9999 );
+
 	loop {
 		let parts_of_curl = part.next_field().await;  // Result<Option<Field<'_>>, MultipartError>
 
@@ -281,7 +283,7 @@ async fn curl_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 		let field_name = field.name().unwrap_or( "unknown" ).to_string();
 
 		if field_name == "f" {
-			match upload_file( field ).await {
+			match upload_file( field, file_id ).await {
 				Err( error_message ) => {
 					return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "curl error location 2: {:?}\n", error_message ) ) );
 				}
@@ -295,7 +297,7 @@ async fn curl_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 	return Err(( StatusCode::BAD_REQUEST, "No file found in request".to_string() ));
 }
 
-async fn html_upload_processor( mut part: Multipart, State( state ): State<&AppState> ) -> Result<String, ( StatusCode, String )> {
+async fn html_upload_processor( State( state ): State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
 	let file_id: i32 = rand::rng().random_range( 0..=99999 );
 
 	loop {
