@@ -157,9 +157,10 @@ async fn html_downloader_form() -> Html<&'static str> {
                         Enter file download key or file link:
                         <input type="text" name="file_download_field">
                     </label>
-                    <button type="submit">Download</button>
+                    <button type="submit">Search</button>
                 </form>
                 <p id="status"></p>
+                <button id="download_btn" type="button" style="display:none;">Download File</button>
                 <script>
                     document.getElementById('download_form').addEventListener('submit', function(e) {
                         e.preventDefault();
@@ -168,15 +169,24 @@ async fn html_downloader_form() -> Html<&'static str> {
 
                         xhr.onload = function() {
                             if (xhr.status === 200) {
-                                document.getElementById('status').textContent = 'File found: ' + xhr.responseText;
+                                document.getElementById('status').textContent = xhr.responseText;
+                                document.getElementById('download_btn').style.display = 'inline';
                             } else {
                                 document.getElementById('status').textContent = 'Error: ' + xhr.responseText;
+                                document.getElementById('download_btn').style.display = 'none';
                             }
                         };
 
                         xhr.open('POST', '/html_download_processor');
                         xhr.send(new FormData(this));
                     });
+
+                    document.getElementById( 'download_btn' ).addEventListener( 'click', function(e) {
+                    	e.preventDefault();
+
+                     	const xhr = new XMLHttpRequest();
+                      	alert( "gem" );
+                    } );
                 </script>
             </body>
         </html>
@@ -288,7 +298,6 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 
 	return Ok( format!( "Success, uploaded {} of {} bytes. File ID for downloading is {}.\n", file_name, total_bytes_written, file_id ) )
 }
-
 
 async fn download_file( state: State<AppState>, parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
 	let id = match parsed_field.text().await {
