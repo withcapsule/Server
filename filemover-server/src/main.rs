@@ -383,6 +383,14 @@ async fn main() {
 		Ok( db ) => db
 	} };
 
+	sqlx::query(
+		"CREATE TABLE IF NOT EXISTS filetable (
+			ID VARCHAR(16) PRIMARY KEY,
+			FileName VARCHAR(64) NOT NULL,
+			UploadTime INTEGER NOT NULL
+		)"
+ 	).execute( &state.database ).await.expect( "Failed to create table since it didn't exist." );
+
 	create_dir_all( "./uploads/temp" ).await.unwrap();
 
     let app: Router<> = Router::new()
