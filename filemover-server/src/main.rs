@@ -1,4 +1,11 @@
-use std::{process::exit, str::FromStr};
+use std::{
+	process::{
+		exit
+	},
+	str::{
+		FromStr
+	}
+};
 
 use axum::{
     Router,
@@ -50,7 +57,13 @@ use tower_http::{
 };
 
 use sqlx::{
-	SqlitePool, sqlite::{SqliteConnectOptions, SqliteJournalMode::Wal}
+	SqlitePool,
+	sqlite::{
+		SqliteConnectOptions,
+		SqliteJournalMode::{
+			Wal
+		}
+	}
 };
 
 #[derive(Clone)]
