@@ -75,12 +75,6 @@ struct AppState {
 	database: SqlitePool
 }
 
-struct FileTableData {
-	id: u32,
-	file_name: String,
-	upload_time: u32
-}
-
 async fn pong() -> Json<Value> {
 	return Json( json!( { "message": "pong" } ) )
 }
@@ -238,7 +232,7 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
         Err( error_message ) => panic!( "Critical system time issue, possibly before UNIX_EPOCH. Details: {}", error_message ),
     };
 
-    println!( "1970-01-01 00:00:00 UTC was {} seconds ago!", upload_time );
+    // println!( "1970-01-01 00:00:00 UTC was {} seconds ago!", upload_time );
 
     let _= sqlx::query( "INSERT INTO filetable(ID, FileName, UploadTime) VALUES(?, ?, ?)" )
         .bind( file_id )
@@ -287,17 +281,40 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 }
 
 
+async fn download_file( state: State<AppState>, mut parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
+	let file_id = match parsed_field.text().await {
+		Err( error_msg ) => {
+			return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "failed to do something, error: {}", error_msg ) ) );
+		}
+		Ok( id ) => id
+	};
 
 
-async fn download_file() {
+	// sqlx::query();
+	let res = match sqlx::query( "SELECT * FROM filetable WHERE ID LIKE ?" )
+        .bind( file_id )
+        .fetch_optional( &state.database )   // use fetch_optional here cause
+        .await
+        .map_err( |error_message| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to add to db, error: {}", error_message ) ) } ) {
+        Err( error_message ) => {
+        return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_message ) ) );
+        }
+        Ok( res ) => res
+        };
 
+
+
+
+
+
+
+
+	return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error with file downloader." ) ) );
 }
 
 async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
 	// example:
 	// curl -X POST http://localhost:9001/curlup -F 'f=@mydocument.txt'
-
-	let file_id = rand::rng().random_range( 0..=9999 );
 
 	loop {
 		let parts_of_curl = part.next_field().await;  // Result<Option<Field<'_>>, MultipartError>
@@ -401,8 +418,41 @@ async fn html_upload_processor( state: State<AppState>, mut part: Multipart ) ->
 	return Err(( StatusCode::BAD_REQUEST, "No file found in request".to_string() ));
 }
 
-async fn html_download_processor() {
+async fn curl_download_processor( state: State<AppState>, mut part: Multipart ) {
 
+}
+
+async fn html_download_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+	loop {
+		let html_parts = part.next_field().await;
+
+		let current_html_part = match html_parts {
+			Err( error_message ) => {
+				return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "issue with download site, error: {}", error_message ) ) );
+			}
+			Ok( found ) => found
+		};
+
+		let current_field = match current_html_part {
+			Some( field ) => field,
+			None => break
+		};
+
+		let field_name = current_field.name().unwrap_or( "massive_issue_please_fix" ).to_string();
+
+		if field_name == "file_download_field" {
+			match download_file( state, current_field ).await {
+				Err( error_message ) => {
+					return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error with download form. Details: {:?}", error_message ) ) )
+				}
+				Ok( message_from_uploader ) => {
+					return Ok( message_from_uploader )
+				}
+			}
+		}
+	}
+
+	return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error with download form." ) ) );
 }
 
 
