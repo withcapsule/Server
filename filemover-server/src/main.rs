@@ -1,3 +1,5 @@
+use std::{process::exit, str::FromStr};
+
 use axum::{
     Router,
     http::{
@@ -14,6 +16,7 @@ use axum::{
      	Json
     },
     extract::{
+    	State,
     	DefaultBodyLimit,
     	Multipart,
      	multipart::{
@@ -46,6 +49,14 @@ use tower_http::{
 	}
 };
 
+use sqlx::{
+	SqlitePool, sqlite::SqliteConnectOptions
+};
+
+#[derive(Clone)]
+struct AppState {
+	database: SqlitePool
+}
 
 
 async fn pong() -> Json<Value> {
@@ -343,6 +354,28 @@ async fn html_download_processor() {
 
 #[tokio::main]
 async fn main() {
+	let options = match SqliteConnectOptions::from_str( "sqlite:filemover.db" ) {
+		Ok( options ) => options,
+		Err( error_message ) => {
+			println!( "Failed to create db, error msg: {}", error_message );
+			exit( 1 );
+		}
+	};
+
+	options.create_if_missing( true );
+	options.journal_mode( sqlx::sqlite::SqliteJournalMode::Wal );
+	options.read_only( false );
+
+
+	let sqlite_db = SqlitePool::connect_with( options ).await;
+	let state = AppState { database: match sqlite_db {
+		Err( error_message ) => {
+			println!( "Failed to create database. Error: {}", error_message );
+			exit( 1 );
+		}
+		Ok( db ) => db
+	} };
+
 	create_dir_all( "./uploads/temp" ).await.unwrap();
 
     let app: Router<> = Router::new()
@@ -358,6 +391,8 @@ async fn main() {
 
         .route("/", get( main_menu ) )
 
+        .with_state( state )
+
         // 1 byte * 1024 = 1 KiB
         // 1 KiB * 1024 = 1 MiB
         // 1 MiB * 32 = 32 MiB
@@ -371,5 +406,3 @@ async fn main() {
     let listener = TcpListener::bind( "0.0.0.0:9001" ).await.unwrap();
     axum::serve( listener, app ).await.unwrap();
 }
-
-
