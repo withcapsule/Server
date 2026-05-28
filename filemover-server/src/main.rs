@@ -4,6 +4,9 @@ use std::{
 	},
 	str::{
 		FromStr
+	},
+	time::{
+		SystemTime
 	}
 };
 
@@ -64,7 +67,10 @@ use sqlx::{
 		SqliteJournalMode::{
 			Wal
 		}
-	}
+	},
+	Sqlite,
+	Execute,
+	QueryBuilder
 };
 
 #[derive(Clone)]
@@ -72,6 +78,11 @@ struct AppState {
 	database: SqlitePool
 }
 
+struct FileTableData {
+	id: u32,
+	file_name: String,
+	upload_time: u32
+}
 
 async fn pong() -> Json<Value> {
 	return Json( json!( { "message": "pong" } ) )
@@ -218,7 +229,24 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
     let mut total_bytes_written: usize = 0;
 
     // TODO: ADD ERROR HANDLING
-    sqlx::query( "" ).execute( &state.database );
+    // sqlx::query( format!( "INSERT INTO filetable({})", file_id ) ).execute( &state.database );
+
+    // from rust docs
+    let upload_time = match SystemTime::now().duration_since( SystemTime::UNIX_EPOCH ) {
+        Ok( time ) => time.as_secs(),
+        Err( error_message ) => panic!( "Critical system time issue, possibly before UNIX_EPOCH. Details: {}", error_message ),
+    };
+
+    let mut insert_query: QueryBuilder<Sqlite> = QueryBuilder::new(
+    	"INSERT INTO filetable(ID, FileName, UploadTime) "
+    );
+
+    println!( "1970-01-01 00:00:00 UTC was {} seconds ago!", upload_time );
+
+    insert_query.push_bind( format!( "VALUES ({}, {}, {})", file_id, file_name, upload_time ) );
+
+    let query = insert_query.build();
+    let _ = query.execute( &state.database ).await;
 
 	loop {
 		let chunk_piece = parsed_field.chunk().await;      // Result<Option<Bytes>, MultipartError>
@@ -261,7 +289,7 @@ async fn download_file() {
 
 }
 
-async fn curl_upload_processor( mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
 	// example:
 	// curl -X POST http://localhost:9001/curlup -F 'f=@mydocument.txt'
 
@@ -287,7 +315,7 @@ async fn curl_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 		let field_name = field.name().unwrap_or( "unknown" ).to_string();
 
 		if field_name == "f" {
-			match upload_file( field ).await {
+			match upload_file( state, field ).await {
 				Err( error_message ) => {
 					return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "curl error location 2: {:?}\n", error_message ) ) );
 				}
@@ -301,7 +329,7 @@ async fn curl_upload_processor( mut part: Multipart ) -> Result<String, ( Status
 	return Err(( StatusCode::BAD_REQUEST, "No file found in request".to_string() ));
 }
 
-async fn html_upload_processor( State( state ): State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+async fn html_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
 	loop {
 		// begin looking at the next part of an HTML form that was submitted
 		let parts_of_html_form = part.next_field().await;  // returns Result<Option<Field>>
@@ -347,7 +375,7 @@ async fn html_upload_processor( State( state ): State<AppState>, mut part: Multi
 		// parse the html form until a field named "file" is found as that's what the name is set to in HTML
 		// in that will be the file that the user is uploading
 		if current_field_name == "file_upload_field" {
-			match upload_file( current_field ).await {
+			match upload_file( state, current_field ).await {
 				// upload file returns Result<String, (StatusCode, String)>
 				// so Ok() is literally just returning a formatted String
 				Ok( message_from_uploader ) => {
