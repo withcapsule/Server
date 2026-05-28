@@ -1,13 +1,5 @@
 use std::{
-	process::{
-		exit
-	},
-	str::{
-		FromStr
-	},
-	time::{
-		SystemTime
-	}
+	fmt::format, process::exit, str::FromStr, time::SystemTime
 };
 
 use axum::{
@@ -36,12 +28,14 @@ use axum::{
 };
 
 use rand::RngExt;
+
 use tokio::{
     io::{
         AsyncWriteExt
     },
 	fs::{
 		File,
+		try_exists,
 		create_dir_all,
 	},
 	net::{
@@ -61,12 +55,8 @@ use tower_http::{
 };
 
 use sqlx::{
-	SqlitePool,
-	sqlite::{
-		SqliteConnectOptions,
-		SqliteJournalMode::{
-			Wal
-		}
+	Row, SqlitePool, sqlite::{
+		SqliteConnectOptions, SqliteJournalMode::Wal, SqliteRow
 	}
 };
 
@@ -162,7 +152,7 @@ async fn html_downloader_form() -> Html<&'static str> {
         <html>
             <body>
             	<button onclick="location.href='/'" type="button">Home</button>
-                <form action="/html_download_processor" method="get" enctype="multipart/form-data">
+                <form action="/html_download_processor" method="post" enctype="multipart/form-data">
                     <label>
                         Enter file download key or file link:
                         <input type="text" name="file_download_field">
@@ -281,8 +271,8 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 }
 
 
-async fn download_file( state: State<AppState>, mut parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
-	let file_id = match parsed_field.text().await {
+async fn download_file( state: State<AppState>, parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
+	let id = match parsed_field.text().await {
 		Err( error_msg ) => {
 			return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "failed to do something, error: {}", error_msg ) ) );
 		}
@@ -290,26 +280,32 @@ async fn download_file( state: State<AppState>, mut parsed_field: Field<'_> ) ->
 	};
 
 
-	// sqlx::query();
-	let res = match sqlx::query( "SELECT * FROM filetable WHERE ID LIKE ?" )
-        .bind( file_id )
-        .fetch_optional( &state.database )   // use fetch_optional here cause
-        .await
-        .map_err( |error_message| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to add to db, error: {}", error_message ) ) } ) {
-        Err( error_message ) => {
-        return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_message ) ) );
+	let res: SqliteRow = match sqlx::query( "SELECT * FROM filetable WHERE ID LIKE ?" ).bind( id ).fetch_optional( &state.database ).await.map_err( |e| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to search db, error: {}", e ) ) } ) {
+        Err( error_message ) => { return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_message ) ) ); }
+        Ok( res ) => match res {
+	        Some( found_res ) => found_res,
+	        None => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error 1 with file downloader." ) ) ); }
         }
-        Ok( res ) => res
-        };
+    };
 
+	let file_id: String = res.get( "ID" );
+	let file_name: String = res.get( "FileName" );
+	let upload_time: i64 = res.get( "UploadTime" );
 
+	let file_exists: bool = match try_exists( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await {
+		Err( error_msg ) => {
+			return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_msg ) ) );
+		}
+		Ok( file ) => file
+	};
 
+	println!( "Received download request for ID# {}, which is `{}` and it was uploaded at: {}.", file_id, file_name, upload_time );
 
-
-
-
-
-	return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error with file downloader." ) ) );
+	if file_exists {
+		return Ok( format!( "File {} found!", file_name  ) );
+	} else {
+		return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error 2 with file downloader." ) ) );
+	}
 }
 
 async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
