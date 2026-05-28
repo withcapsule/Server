@@ -198,7 +198,8 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 		return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
 	}
 
-	let path = format!( "./uploads/temp/{}", file_name );
+	create_dir_all( format!( "./uploads/temp/{}", file_id ) ).await.unwrap();
+	let path = format!( "./uploads/temp/{}/{}", file_id, file_name );
 
 	let file = File::create( path ).await; // io::Result<File>
 
