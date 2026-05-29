@@ -57,7 +57,10 @@ use real::{
 };
 
 use rand::{
-	RngExt
+	RngExt,
+	distr::{
+		Alphanumeric
+	}
 };
 
 use tokio::{
@@ -269,8 +272,11 @@ async fn html_downloader_form() -> Html<&'static str> {
 }
 
 async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
-	// DB contains ID, FileName, UploadTime
-	let file_id: i32 = rand::rng().random_range( 0..=99999 );
+	let file_id: String = rand::rng()
+		.sample_iter( Alphanumeric )
+		.take( 8 )
+		.map( char::from )
+		.collect();
 
 	// this is now an Option<&str>
 	// this handles the `self` parameter and handles the success branch
@@ -360,16 +366,17 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 
 	println!( "{} bytes received over {} chunks", total_bytes_written, chunk_loops - 1 );
 
-	let _= sqlx::query( "INSERT INTO filetable(ID, FileName, UploadTime, FileSize) VALUES(?, ?, ?, ?)" )
-        .bind( file_id )
+	if let Err( error_message ) = sqlx::query( "INSERT INTO filetable(ID, FileName, UploadTime, FileSize) VALUES(?, ?, ?, ?)" )
+        .bind( &file_id )
         .bind( &file_name )
         .bind( upload_time as i64 )
         .bind( total_bytes_written as i64 )
         .execute( &state.database )
-        .await
-        .map_err( |error_message| {
-        	return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to add to db, error: {}", error_message ) )
-        } )?;
+        .await {
+        	remove_file( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await.ok();
+        	remove_dir( format!( "./uploads/temp/{}", file_id ) ).await.ok();
+        	return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to add to db, error: {}", error_message ) ) );
+        }
 
 	return Ok( format!( "Success, uploaded {} of {} bytes. File ID for downloading is {}.\n", file_name, total_bytes_written, file_id ) )
 }
