@@ -1,4 +1,5 @@
 use std::{
+	net::SocketAddr,
 	process::{
 		exit
 	},
@@ -21,7 +22,9 @@ use axum::{
         Multipart,
         Path,
         State,
-        multipart::Field
+        multipart::{
+        	Field
+        }
     },
     http::{
    		HeaderValue,
@@ -39,7 +42,23 @@ use axum::{
     }
 };
 
-use rand::RngExt;
+use axum_governor::{
+	GovernorLayer
+};
+
+use lazy_limit::{
+	init_rate_limiter,
+	Duration as RateDuration,
+	RuleConfig
+};
+
+use real::{
+	RealIpLayer
+};
+
+use rand::{
+	RngExt
+};
 
 use tokio::{
     io::{
@@ -599,6 +618,14 @@ async fn main() {
 
 	create_dir_all( "./uploads/temp" ).await.unwrap();
 
+	init_rate_limiter!(
+		default: RuleConfig::new( RateDuration::seconds( 1 ), 20 ),
+		routes: [
+			( "/curlup", RuleConfig::new( RateDuration::seconds( 1 ), 2 ) ),
+			( "/html_upload_processor", RuleConfig::new( RateDuration::seconds( 1 ), 2 ) )
+		]
+	).await;
+
 	let cleanup_db_clone = state.database.clone();
 
 	tokio::spawn( async move {
@@ -695,6 +722,8 @@ async fn main() {
         // 1 byte * 1024 = 1 KiB
         // 1 KiB * 1024 = 1 MiB
         // 1 MiB * 32 = 32 MiB
+        .layer( GovernorLayer::default() )
+        .layer( RealIpLayer::default() )
         .layer( DefaultBodyLimit::max( 1 * 1024 * 1024 * 256 ) )
         .layer(
         	CorsLayer::new()
@@ -704,5 +733,5 @@ async fn main() {
         );
 
     let listener = TcpListener::bind( "0.0.0.0:9001" ).await.unwrap();
-    axum::serve( listener, app ).await.unwrap();
+    axum::serve( listener, app.into_make_service_with_connect_info::<SocketAddr>() ).await.unwrap();
 }
