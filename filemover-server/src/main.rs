@@ -7,6 +7,9 @@ use std::{
 	},
 	time::{
 		SystemTime
+	},
+	time::{
+		Duration
 	}
 };
 
@@ -44,9 +47,14 @@ use tokio::{
     },
 	fs::{
 		File,
-        read_dir,
+		ReadDir,
+		DirEntry,
 		try_exists,
+		read_dir,
+		remove_dir,
+		remove_file,
 		create_dir_all,
+		remove_dir_all
 	},
 	net::{
 		TcpListener
@@ -300,16 +308,6 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 
     // println!( "1970-01-01 00:00:00 UTC was {} seconds ago!", upload_time );
 
-    let _= sqlx::query( "INSERT INTO filetable(ID, FileName, UploadTime) VALUES(?, ?, ?)" )
-        .bind( file_id )
-        .bind( &file_name )
-        .bind( upload_time as i64 )
-        .execute( &state.database )
-        .await
-        .map_err( |error_message| {
-        	( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to add to db, error: {}", error_message ) )
-        } );
-
 
 
 	loop {
@@ -343,6 +341,17 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 
 	println!( "{} bytes received over {} chunks", total_bytes_written, chunk_loops - 1 );
 
+	let _= sqlx::query( "INSERT INTO filetable(ID, FileName, UploadTime, FileSize) VALUES(?, ?, ?, ?)" )
+        .bind( file_id )
+        .bind( &file_name )
+        .bind( upload_time as i64 )
+        .bind( total_bytes_written as i64 )
+        .execute( &state.database )
+        .await
+        .map_err( |error_message| {
+        	return ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to add to db, error: {}", error_message ) )
+        } )?;
+
 	return Ok( format!( "Success, uploaded {} of {} bytes. File ID for downloading is {}.\n", file_name, total_bytes_written, file_id ) )
 }
 
@@ -355,7 +364,7 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 	};
 
 
-	let res: SqliteRow = match sqlx::query( "SELECT * FROM filetable WHERE ID LIKE ?" ).bind( id ).fetch_optional( &state.database ).await.map_err( |e| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to search db, error: {}", e ) ) } ) {
+	let res: SqliteRow = match sqlx::query( "SELECT * FROM filetable WHERE ID = ?" ).bind( id ).fetch_optional( &state.database ).await.map_err( |e| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to search db, error: {}", e ) ) } ) {
         Err( error_message ) => { return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_message ) ) ); }
         Ok( res ) => match res {
 	        Some( found_res ) => found_res,
@@ -385,7 +394,7 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 
 async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
     // println!( "{}", file_id );
-    let res: SqliteRow = match sqlx::query( "SELECT * FROM filetable WHERE ID LIKE ?" ).bind( id ).fetch_optional( &state.database ).await.map_err( |e| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to search db, error: {}", e ) ) } ) {
+    let res: SqliteRow = match sqlx::query( "SELECT * FROM filetable WHERE ID = ?" ).bind( id ).fetch_optional( &state.database ).await.map_err( |e| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to search db, error: {}", e ) ) } ) {
            Err( error_message ) => { return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_message ) ) ); }
            Ok( res ) => match res {
 	        Some( found_res ) => found_res,
@@ -395,6 +404,7 @@ async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Re
 
 	let file_id: String = res.get( "ID" );
 	let file_name: String = res.get( "FileName" );
+	let file_size: i64 = res.get( "FileSize" );
 
 
     println!( "file to download: ./uploads/temp/{}/{}", file_id, file_name );
@@ -411,6 +421,7 @@ async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Re
     let response_object = Response::builder()
         .status( StatusCode::OK )
         .header( "Content-Type", "application/octet-stream" )
+        .header( "Content-Length", file_size )
         .header( "Content-Disposition", format!( "attachment; filename=\"{}\"", file_name ) )
         .body( file_body )
         .unwrap();
@@ -581,11 +592,88 @@ async fn main() {
 		"CREATE TABLE IF NOT EXISTS filetable (
 			ID VARCHAR(16) PRIMARY KEY,
 			FileName VARCHAR(64) NOT NULL,
-			UploadTime INTEGER NOT NULL
+			UploadTime INTEGER NOT NULL,
+			FileSize INTEGER NOT NULL
 		)"
  	).execute( &state.database ).await.expect( "Failed to create table since it didn't exist." );
 
 	create_dir_all( "./uploads/temp" ).await.unwrap();
+
+	let cleanup_db_clone = state.database.clone();
+
+	tokio::spawn( async move {
+		loop {
+			tokio::time::sleep( Duration::from_secs( 60 ) ).await;
+			println!( "Cleanup function" );
+
+			let current_time: u64 = match SystemTime::now().duration_since( SystemTime::UNIX_EPOCH ) {
+		        Ok( time ) => time.as_secs(),
+		        Err( error_message ) => panic!( "Critical system time issue, possibly before UNIX_EPOCH. Details: {}", error_message ),
+		    };
+
+			let res = match sqlx::query( "SELECT ID, FileName FROM filetable WHERE UploadTime < ?" ).bind( (current_time as i64) - 3600 ).fetch_all( &cleanup_db_clone ).await.map_err( |e| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to search db, error: {}", e ) ) } ) {
+		        // Err( error_message ) => { return Err::<String, (axum::http::StatusCode, std::string::String)>( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_message ) ) ); }
+		        Err( error_message ) => { println!( "error: {:?}", error_message ); continue; }
+				Ok( res ) => res
+		    };
+
+			for row in res {
+				let file_id: String = row.get( "ID" );
+				let file_name: String = row.get( "FileName" );
+
+				match remove_file( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await {
+					Err( error ) => { println!( "Error in cleanup with file id {} | more info: {}", file_id, error );
+						match sqlx::query( "DELETE FROM filetable WHERE ID = ?" ).bind( file_id.to_string() ).execute( &cleanup_db_clone ).await {
+							Ok(..) => {
+								println!( "File {} removed and database updated", file_id );
+								match remove_dir( format!( "./uploads/temp/{}", file_id ) ).await {
+									Ok(()) => { println!( "File {} directory deleted", file_id ); }
+									Err( error_msg ) => { println!( "File {} directory deletion failed. Details: {}", file_id, error_msg ); }
+								}
+							}
+							Err( error ) => { println!( "file {} deleted but database entry still exists. details: {}", file_id, error ) }
+						};
+					},
+					Ok(()) => { match sqlx::query( "DELETE FROM filetable WHERE ID = ?" ).bind( file_id.to_string() ).execute( &cleanup_db_clone ).await {
+						Ok(..) => {
+							println!( "File {} removed and database updated", file_id );
+							match remove_dir( format!( "./uploads/temp/{}", file_id ) ).await {
+								Ok(()) => { println!( "File {} directory deleted", file_id ); }
+								Err( error_msg ) => { println!( "File {} directory deletion failed. Details: {}", file_id, error_msg ); }
+							}
+						}
+						Err( error ) => { println!( "file {} deleted but database entry still exists. details: {}", file_id, error ) }
+					}; }
+				};
+			}
+
+			let mut directories: ReadDir = match read_dir( "./uploads/temp" ).await {
+				Err( error_msg ) => { println!( "failed to read dirs, error: {}", error_msg ); continue; }
+				Ok( dir ) => dir
+			};
+
+			loop {
+				let entry: DirEntry = match directories.next_entry().await {
+					Err( error_msg ) => { println!( "directory read error: {}", error_msg ); break; }
+					Ok( dir ) => match dir {
+						Some( dir2 ) => dir2,
+						None => break
+					}
+				};
+
+				match sqlx::query( "SELECT ID FROM filetable WHERE ID = ?" ).bind( entry.file_name().to_string_lossy().to_string() ).fetch_optional( &cleanup_db_clone ).await {
+					Err( error_msg ) => { println!( "error in deleting orphaned dir: {}", error_msg ) }
+					Ok( None ) => {
+						match remove_dir_all( format!( "./uploads/temp/{}", entry.file_name().to_string_lossy().to_string() ) ).await {
+							Err( error_msg ) => { println!( "failed to delete orphaned dir {}, error: {}", entry.file_name().to_string_lossy().to_string(), error_msg ); }
+							Ok(()) => { println!( "orphaned directory {} deleted", entry.file_name().to_string_lossy().to_string() ) }
+						}
+					}
+					_ => {}
+				}
+			}
+		}
+	});
 
     let app: Router<> = Router::new()
         .route( "/ping", get( pong ) )
