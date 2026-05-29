@@ -19,6 +19,7 @@ use axum::{
       	Response
     },
     extract::{
+        Path,
     	State,
     	DefaultBodyLimit,
     	Multipart,
@@ -359,8 +360,12 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 // 	// println!( "" );
 // }
 
-async fn download_file() -> Result<Response, ( StatusCode, String )> {
-	return Ok( ( StatusCode::OK, format!( "placeholder" ) ) );
+// async fn download_file() -> Result<Response, ( StatusCode, String )> {
+//	return Ok( ( StatusCode::OK, format!( "placeholder" ) ) );
+// }
+
+async fn download_file( Path( file_id ): Path<String> ) {
+    println!( "{}", file_id );
 }
 
 async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
@@ -466,7 +471,7 @@ async fn html_upload_processor( state: State<AppState>, mut part: Multipart ) ->
 		}
 	}
 
-	return Err(( StatusCode::BAD_REQUEST, "No file found in request".to_string() ));
+	return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
 }
 
 async fn curl_download_processor( state: State<AppState>, mut part: Multipart ) {
@@ -538,7 +543,7 @@ async fn main() {
     let app: Router<> = Router::new()
         .route( "/ping", get( pong ) )
 
-        .route( "/download", post( download_file ) )
+        .route( "/download/{file_id}", get( download_file ) )
 
         .route( "/curlup", post( curl_upload_processor ) )
 
