@@ -383,37 +383,23 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 	}
 }
 
-async fn download_file( Path( file_id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
+async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
     // println!( "{}", file_id );
-    let final_file_path: String;
-    let file_name: String;
+    let res: SqliteRow = match sqlx::query( "SELECT * FROM filetable WHERE ID LIKE ?" ).bind( id ).fetch_optional( &state.database ).await.map_err( |e| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to search db, error: {}", e ) ) } ) {
+           Err( error_message ) => { return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_message ) ) ); }
+           Ok( res ) => match res {
+	        Some( found_res ) => found_res,
+	        None => { return Err( ( StatusCode::NOT_FOUND, format!( "No file with that ID exists." ) ) ); }
+           }
+       };
 
-    let mut files = match read_dir( format!( "./uploads/temp/{}", file_id ) ).await {
-        Err( error_msg ) => {
-            return Err( ( StatusCode::NOT_FOUND, format!( "error: {}", error_msg ) ) );
-        }
-        Ok( file ) => file
-    };
+	let file_id: String = res.get( "ID" );
+	let file_name: String = res.get( "FileName" );
 
-    loop {
-        let current = match files.next_entry().await {
-            Err( error_msg ) => { return Err( ( StatusCode::NOT_FOUND, format!( "error: {}", error_msg ) ) ); }
-            Ok( file ) => match file {
-                Some( file ) => file,
-                None => { return Err( ( StatusCode::NOT_FOUND, format!( "some error happened" ) ) ); }
-            }
-        };
 
-        if current.path().is_file() {
-        	final_file_path = current.path().to_str().unwrap_or( "" ).to_string();
-        	file_name = current.file_name().to_string_lossy().to_string();
-         	break;
-     	}
-    }
+    println!( "file to download: ./uploads/temp/{}/{}", file_id, file_name );
 
-    println!( "file to download: {}", final_file_path );
-
-    let file_to_send = match File::open( final_file_path ).await {
+    let file_to_send = match File::open( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await {
     	Err( error_msg ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "unable to open file, details: {}", error_msg ) ) ) }
      	Ok( file ) => file
     };
@@ -537,10 +523,6 @@ async fn html_upload_processor( state: State<AppState>, mut part: Multipart ) ->
 	}
 
 	return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
-}
-
-async fn curl_download_processor( state: State<AppState>, mut part: Multipart ) {
-
 }
 
 async fn html_download_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
