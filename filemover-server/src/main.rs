@@ -1,5 +1,5 @@
 use std::{
-	fmt::format, process::exit, str::FromStr, time::SystemTime
+	collections::HashMap, fmt::format, process::exit, str::FromStr, time::SystemTime
 };
 
 use axum::{
@@ -15,7 +15,8 @@ use axum::{
     },
     response::{
     	Html,
-     	Json
+     	Json,
+      	Response
     },
     extract::{
     	State,
@@ -55,7 +56,7 @@ use tower_http::{
 };
 
 use sqlx::{
-	Row, SqlitePool, sqlite::{
+	Row, SqlitePool, query::Query, sqlite::{
 		SqliteConnectOptions, SqliteJournalMode::Wal, SqliteRow
 	}
 };
@@ -162,6 +163,7 @@ async fn html_downloader_form() -> Html<&'static str> {
                 <p id="status"></p>
                 <button id="download_btn" type="button" style="display:none;">Download File</button>
                 <script>
+                	var id = '';
                     document.getElementById('download_form').addEventListener('submit', function(e) {
                         e.preventDefault();
 
@@ -184,8 +186,25 @@ async fn html_downloader_form() -> Html<&'static str> {
                     document.getElementById( 'download_btn' ).addEventListener( 'click', function(e) {
                     	e.preventDefault();
 
-                     	const xhr = new XMLHttpRequest();
-                      	alert( "gem" );
+	                    const params = new URLSearchParams({
+	                        id: "123456"
+	                    });
+
+                     	const xhr_dl = new XMLHttpRequest();
+                      	xhr_dl.open("GET", `/download?${params.toString()}`, true);
+                      	xhr_dl.onload = function () {
+		                    if (xhr_dl.status === 200) {
+								console.log("Download response:", xhr_dl.response);
+		                    } else {
+		                        console.error("Request failed:", xhr_dl.status);
+		                    }
+	                    };
+
+	                    xhr_dl.onerror = function () {
+							console.error("Network error");
+	                    };
+
+	                    xhr_dl.send();
                     } );
                 </script>
             </body>
@@ -299,7 +318,7 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 	return Ok( format!( "Success, uploaded {} of {} bytes. File ID for downloading is {}.\n", file_name, total_bytes_written, file_id ) )
 }
 
-async fn download_file( state: State<AppState>, parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
+async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
 	let id = match parsed_field.text().await {
 		Err( error_msg ) => {
 			return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Could not read the file ID you entered, error: {}", error_msg ) ) );
@@ -334,6 +353,14 @@ async fn download_file( state: State<AppState>, parsed_field: Field<'_> ) -> Res
 	} else {
 		return Err( ( StatusCode::NOT_FOUND, format!( "File record exists in database but the file is missing on disk." ) ) );
 	}
+}
+
+// async fn download_file( state: State<AppState>, Query( params ): Query<HashMap<String, String>> ) -> Result<Response, ( StatusCode, String )> {
+// 	// println!( "" );
+// }
+
+async fn download_file() -> Result<Response, ( StatusCode, String )> {
+	return Ok( ( StatusCode::OK, format!( "placeholder" ) ) );
 }
 
 async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
@@ -465,7 +492,7 @@ async fn html_download_processor( state: State<AppState>, mut part: Multipart ) 
 		let field_name = current_field.name().unwrap_or( "massive_issue_please_fix" ).to_string();
 
 		if field_name == "file_download_field" {
-			match download_file( state, current_field ).await {
+			match search_file( state, current_field ).await {
 				Err( error_message ) => {
 					return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error with download form. Details: {:?}", error_message ) ) )
 				}
@@ -510,6 +537,8 @@ async fn main() {
 
     let app: Router<> = Router::new()
         .route( "/ping", get( pong ) )
+
+        .route( "/download", post( download_file ) )
 
         .route( "/curlup", post( curl_upload_processor ) )
 
