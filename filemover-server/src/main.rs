@@ -1,5 +1,13 @@
 use std::{
-	collections::HashMap, fmt::format, process::exit, str::FromStr, time::SystemTime
+	process::{
+		exit
+	},
+	str::{
+		FromStr
+	},
+	time::{
+		SystemTime
+	}
 };
 
 use axum::{
@@ -15,8 +23,7 @@ use axum::{
     },
     response::{
     	Html,
-     	Json,
-      	Response
+     	Json
     },
     extract::{
         Path,
@@ -58,8 +65,14 @@ use tower_http::{
 };
 
 use sqlx::{
-	Row, SqlitePool, query::Query, sqlite::{
-		SqliteConnectOptions, SqliteJournalMode::Wal, SqliteRow
+	Row,
+	SqlitePool,
+	sqlite::{
+		SqliteConnectOptions,
+		SqliteRow,
+		SqliteJournalMode::{
+			Wal
+		}
 	}
 };
 
@@ -165,7 +178,7 @@ async fn html_downloader_form() -> Html<&'static str> {
                 <p id="status"></p>
                 <button id="download_btn" type="button" style="display:none;">Download File</button>
                 <script>
-                	var id = '';
+                	var file_id = '';
                     document.getElementById('download_form').addEventListener('submit', function(e) {
                         e.preventDefault();
 
@@ -173,6 +186,7 @@ async fn html_downloader_form() -> Html<&'static str> {
 
                         xhr.onload = function() {
                             if (xhr.status === 200) {
+                                file_id = document.querySelector('[name="file_download_field"]').value.trim();
                                 document.getElementById('status').textContent = xhr.responseText;
                                 document.getElementById('download_btn').style.display = 'inline';
                             } else {
@@ -185,29 +199,32 @@ async fn html_downloader_form() -> Html<&'static str> {
                         xhr.send(new FormData(this));
                     });
 
-                    document.getElementById( 'download_btn' ).addEventListener( 'click', function(e) {
+                    document.getElementById('download_btn').addEventListener('click', function(e) {
                     	e.preventDefault();
 
-	                    const params = new URLSearchParams({
-	                        id: "123456"
-	                    });
-
                      	const xhr_dl = new XMLHttpRequest();
-                      	xhr_dl.open("GET", `/download?${params.toString()}`, true);
-                      	xhr_dl.onload = function () {
+                      	xhr_dl.open('GET', '/download/' + file_id, true);
+                        xhr_dl.responseType = 'blob';
+
+                      	xhr_dl.onload = function() {
 		                    if (xhr_dl.status === 200) {
-								console.log("Download response:", xhr_dl.response);
+                                const url = URL.createObjectURL(xhr_dl.response);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = '';
+                                a.click();
+                                URL.revokeObjectURL(url);
 		                    } else {
-		                        console.error("Request failed:", xhr_dl.status);
+		                        document.getElementById('status').textContent = 'Download failed: ' + xhr_dl.status;
 		                    }
 	                    };
 
-	                    xhr_dl.onerror = function () {
-							console.error("Network error");
+	                    xhr_dl.onerror = function() {
+							document.getElementById('status').textContent = 'Network error during download';
 	                    };
 
 	                    xhr_dl.send();
-                    } );
+                    });
                 </script>
             </body>
         </html>
@@ -348,7 +365,7 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 		Ok( file ) => file
 	};
 
-	println!( "Received download request for ID# {}, which is `{}` and it was uploaded at: {}.", file_id, file_name, upload_time );
+	println!( "Received search request for ID# {}, which is `{}` and it was uploaded at: {}.", file_id, file_name, upload_time );
 
 	if file_exists {
 		return Ok( format!( "File {} found!", file_name  ) );
@@ -367,18 +384,31 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 
 async fn download_file( Path( file_id ): Path<String> ) -> Result<String, ( StatusCode, String )> {
     // println!( "{}", file_id );
-    let files = match read_dir( "./uploads/temp/{file_id}" ).await {
+    let mut final_file_path: String;
+
+    let mut files = match read_dir( format!( "./uploads/temp/{}", file_id ) ).await {
         Err( error_msg ) => {
-            return Err( ( StatusCode::NOT_FOUND, format!( "Not found, error: {}", error_msg ) ) );
+            return Err( ( StatusCode::NOT_FOUND, format!( "error: {}", error_msg ) ) );
         }
         Ok( file ) => file
     };
 
-    for entry in read_dir( "./uploads/temp/{file_id}" ).await {
-        let entry = entry;
-        let path = entry.path();
+    loop {
+        let current = match files.next_entry().await {
+            Err( error_msg ) => { return Err( ( StatusCode::NOT_FOUND, format!( "error: {}", error_msg ) ) ); }
+            Ok( file ) => match file {
+                Some( file ) => file,
+                None => { return Err( ( StatusCode::NOT_FOUND, format!( "some error happened" ) ) ); }
+            }
+        };
+
+        if current.path().is_file() {
+        	final_file_path = current.path().to_str().unwrap_or( "" ).to_string();
+         	break;
+     	}
     }
 
+    println!( "file to download: {}", final_file_path );
 
 	return Ok( format!( "placeholder" ) );
 }
