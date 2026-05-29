@@ -37,6 +37,7 @@ use tokio::{
     },
 	fs::{
 		File,
+        read_dir,
 		try_exists,
 		create_dir_all,
 	},
@@ -364,8 +365,22 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 //	return Ok( ( StatusCode::OK, format!( "placeholder" ) ) );
 // }
 
-async fn download_file( Path( file_id ): Path<String> ) {
-    println!( "{}", file_id );
+async fn download_file( Path( file_id ): Path<String> ) -> Result<String, ( StatusCode, String )> {
+    // println!( "{}", file_id );
+    let files = match read_dir( "./uploads/temp/{file_id}" ).await {
+        Err( error_msg ) => {
+            return Err( ( StatusCode::NOT_FOUND, format!( "Not found, error: {}", error_msg ) ) );
+        }
+        Ok( file ) => file
+    };
+
+    for entry in read_dir( "./uploads/temp/{file_id}" ).await {
+        let entry = entry;
+        let path = entry.path();
+    }
+
+
+	return Ok( format!( "placeholder" ) );
 }
 
 async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
