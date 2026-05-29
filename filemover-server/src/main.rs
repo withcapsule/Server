@@ -12,22 +12,18 @@ use std::{
 
 use axum::{
     Router,
-    body::{
-    	Body
-    },
+    body::Body,
     extract::{
         DefaultBodyLimit,
         Multipart,
         Path,
         State,
-        multipart::{
-        	Field
-        }
+        multipart::Field
     },
     http::{
    		HeaderValue,
      	Method,
-      	StatusCode
+      	StatusCode, header
     },
     response::{
     	Html,
@@ -191,8 +187,8 @@ async fn html_downloader_form() -> Html<&'static str> {
                         const xhr = new XMLHttpRequest();
 
                         xhr.onload = function() {
-                            if (xhr.status === 200) {
-                                file_id = document.querySelector('[name="file_download_field"]').value.trim();
+                        	if (xhr.status === 200) {
+                         		file_id = document.querySelector('[name="file_download_field"]').value.trim();
                                 document.getElementById('status').textContent = xhr.responseText;
                                 document.getElementById('download_btn').style.display = 'inline';
                             } else {
@@ -205,28 +201,35 @@ async fn html_downloader_form() -> Html<&'static str> {
                         xhr.send(new FormData(this));
                     });
 
-                    document.getElementById('download_btn').addEventListener('click', function(e) {
+                    document.getElementById( 'download_btn' ).addEventListener( 'click', function( e ) {
                     	e.preventDefault();
 
                      	const xhr_dl = new XMLHttpRequest();
-                      	xhr_dl.open('GET', '/download/' + file_id, true);
+                      	xhr_dl.open( 'GET', '/download/' + file_id, true );
                         xhr_dl.responseType = 'blob';
 
                       	xhr_dl.onload = function() {
-		                    if (xhr_dl.status === 200) {
-                                const url = URL.createObjectURL(xhr_dl.response);
-                                const a = document.createElement('a');
-                                a.href = url;
-                                a.download = '';
-                                a.click();
-                                URL.revokeObjectURL(url);
+		                    if( xhr_dl.status === 200 ) {
+								const disposition = xhr_dl.getResponseHeader( 'Content-Disposition' );
+						         let filename = 'download';
+						          if( disposition ) {
+						              const match = disposition.match( /filename="?([^";\n]+)"?/ );
+						              if( match ) filename = match[ 1 ].trim();
+						          }
+
+						          const url = URL.createObjectURL( xhr_dl.response );
+						          const a = document.createElement( 'a' );
+						          a.href = url;
+						          a.download = filename;
+						          a.click();
+						          URL.revokeObjectURL( url );
 		                    } else {
-		                        document.getElementById('status').textContent = 'Download failed: ' + xhr_dl.status;
+		                        document.getElementById( 'status' ).textContent = 'Download failed: ' + xhr_dl.status;
 		                    }
 	                    };
 
 	                    xhr_dl.onerror = function() {
-							document.getElementById('status').textContent = 'Network error during download';
+							document.getElementById( 'status' ).textContent = 'Network error during download';
 	                    };
 
 	                    xhr_dl.send();
@@ -379,14 +382,6 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 		return Err( ( StatusCode::NOT_FOUND, format!( "File record exists in database but the file is missing on disk." ) ) );
 	}
 }
-
-// async fn download_file( state: State<AppState>, Query( params ): Query<HashMap<String, String>> ) -> Result<Response, ( StatusCode, String )> {
-// 	// println!( "" );
-// }
-
-// async fn download_file() -> Result<Response, ( StatusCode, String )> {
-//	return Ok( ( StatusCode::OK, format!( "placeholder" ) ) );
-// }
 
 async fn download_file( Path( file_id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
     // println!( "{}", file_id );
@@ -635,6 +630,7 @@ async fn main() {
         	CorsLayer::new()
          		.allow_origin( "http://localhost:3000".parse::<HeaderValue>().unwrap() )
            		.allow_methods( [ Method::GET, Method::POST ] )
+             	.expose_headers( [ header::CONTENT_DISPOSITION ] )
         );
 
     let listener = TcpListener::bind( "0.0.0.0:9001" ).await.unwrap();
