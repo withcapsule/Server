@@ -410,7 +410,7 @@ async fn download_file( Path( file_id ): Path<String> ) -> Result<String, ( Stat
 
     println!( "file to download: {}", final_file_path );
 
-	return Ok( format!( "placeholder" ) );
+	return Ok( format!( "placeholder" ) );    // this is wrong here as by doing this, it is LITEARLLY writing "placeholder" to a file LMAO
 }
 
 async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
