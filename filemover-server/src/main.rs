@@ -12,27 +12,31 @@ use std::{
 
 use axum::{
     Router,
+    body::{
+    	Body
+    },
+    extract::{
+        DefaultBodyLimit,
+        Multipart,
+        Path,
+        State,
+        multipart::{
+        	Field
+        }
+    },
     http::{
    		HeaderValue,
      	Method,
       	StatusCode
     },
+    response::{
+    	Html,
+     	Json,
+      	Response
+    },
     routing::{
     	get,
     	post
-    },
-    response::{
-    	Html,
-     	Json
-    },
-    extract::{
-        Path,
-    	State,
-    	DefaultBodyLimit,
-    	Multipart,
-     	multipart::{
-      		Field
-      	}
     }
 };
 
@@ -52,6 +56,8 @@ use tokio::{
 		TcpListener
 	}
 };
+
+use tokio_util::io::ReaderStream;
 
 use serde_json::{
 	json,
@@ -382,9 +388,10 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 //	return Ok( ( StatusCode::OK, format!( "placeholder" ) ) );
 // }
 
-async fn download_file( Path( file_id ): Path<String> ) -> Result<String, ( StatusCode, String )> {
+async fn download_file( Path( file_id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
     // println!( "{}", file_id );
-    let mut final_file_path: String;
+    let final_file_path: String;
+    let file_name: String;
 
     let mut files = match read_dir( format!( "./uploads/temp/{}", file_id ) ).await {
         Err( error_msg ) => {
@@ -404,13 +411,31 @@ async fn download_file( Path( file_id ): Path<String> ) -> Result<String, ( Stat
 
         if current.path().is_file() {
         	final_file_path = current.path().to_str().unwrap_or( "" ).to_string();
+        	file_name = current.file_name().to_string_lossy().to_string();
          	break;
      	}
     }
 
     println!( "file to download: {}", final_file_path );
 
-	return Ok( format!( "placeholder" ) );    // this is wrong here as by doing this, it is LITEARLLY writing "placeholder" to a file LMAO
+    let file_to_send = match File::open( final_file_path ).await {
+    	Err( error_msg ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "unable to open file, details: {}", error_msg ) ) ) }
+     	Ok( file ) => file
+    };
+
+
+    let file_stream = ReaderStream::new( file_to_send );
+    let file_body = Body::from_stream( file_stream );
+
+    let response_object = Response::builder()
+        .status( StatusCode::OK )
+        .header( "Content-Type", "application/octet-stream" )
+        .header( "Content-Disposition", format!( "attachment; filename=\"{}\"", file_name ) )
+        .body( file_body )
+        .unwrap();
+
+	// return Err( ( StatusCode::OK,  format!( "placeholder" ) ) );    // this is wrong here as by doing this, it is LITEARLLY writing "placeholder" to a file LMAO
+    return Ok( response_object );
 }
 
 async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
