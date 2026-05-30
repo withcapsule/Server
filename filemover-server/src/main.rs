@@ -229,6 +229,10 @@ async fn html_downloader_form() -> Html<&'static str> {
                         if (now - lastSearchSentAt < 1000) return;
                         lastSearchSentAt = now;
 
+                        const searchBtn = this.querySelector('button[type="submit"]');
+                        searchBtn.disabled = true;
+                        setTimeout(function() { searchBtn.disabled = false; }, 1000);
+
                         const xhr = new XMLHttpRequest();
 
                         xhr.onload = function() {
