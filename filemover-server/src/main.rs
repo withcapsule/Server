@@ -21,6 +21,7 @@ use axum::{
         DefaultBodyLimit,
         Multipart,
         Path,
+        Request,
         State,
         multipart::{
         	Field
@@ -30,6 +31,10 @@ use axum::{
    		HeaderValue,
      	Method,
       	StatusCode, header
+    },
+    middleware::{
+    	Next,
+    	from_fn
     },
     response::{
     	Html,
@@ -150,8 +155,13 @@ async fn html_uploader_form() -> Html<&'static str> {
                 <p id="statistics"></p>
                 <div id="statistics2" style="white-space: pre-line;"></div>
                 <script>
+                    var lastUploadSentAt = 0;
                     document.getElementById('upload_form').addEventListener('submit', function(e) {
                         e.preventDefault();
+
+                        const now = Date.now();
+                        if (now - lastUploadSentAt < 1000) return;
+                        lastUploadSentAt = now;
 
                         const xhr = new XMLHttpRequest();
 
@@ -211,8 +221,13 @@ async fn html_downloader_form() -> Html<&'static str> {
                 <button id="download_btn" type="button" style="display:none;">Download File</button>
                 <script>
                 	var file_id = '';
+                	var lastSearchSentAt = 0;
                     document.getElementById('download_form').addEventListener('submit', function(e) {
                         e.preventDefault();
+
+                        const now = Date.now();
+                        if (now - lastSearchSentAt < 1000) return;
+                        lastSearchSentAt = now;
 
                         const xhr = new XMLHttpRequest();
 
@@ -588,6 +603,17 @@ async fn html_download_processor( state: State<AppState>, mut part: Multipart ) 
 }
 
 
+async fn add_retry_after( request: Request, next: Next ) -> Response {
+	let response = next.run( request ).await;
+	if response.status() == StatusCode::TOO_MANY_REQUESTS {
+		let ( mut parts, body ) = response.into_parts();
+		parts.headers.insert( header::RETRY_AFTER, HeaderValue::from_static( "1" ) );
+		Response::from_parts( parts, body )
+	} else {
+		response
+	}
+}
+
 #[tokio::main]
 async fn main() {
 	let options = SqliteConnectOptions::from_str( "sqlite:filemover.db" )
@@ -621,7 +647,8 @@ async fn main() {
 		default: RuleConfig::new( RateDuration::seconds( 1 ), 20 ),
 		routes: [
 			( "/curlup", RuleConfig::new( RateDuration::seconds( 1 ), 2 ) ),
-			( "/html_upload_processor", RuleConfig::new( RateDuration::seconds( 1 ), 2 ) )
+			( "/html_upload_processor", RuleConfig::new( RateDuration::seconds( 1 ), 1 ) ),
+			( "/html_download_processor", RuleConfig::new( RateDuration::seconds( 1 ), 1 ) )
 		]
 	).await;
 
@@ -722,6 +749,7 @@ async fn main() {
         // 1 KiB * 1024 = 1 MiB
         // 1 MiB * 32 = 32 MiB
         .layer( GovernorLayer::default() )
+        .layer( from_fn( add_retry_after ) )
         .layer( RealIpLayer::default() )
         .layer( DefaultBodyLimit::max( 1 * 1024 * 1024 * 256 ) )
         .layer(
