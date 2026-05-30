@@ -381,6 +381,17 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 	return Ok( format!( "Success, uploaded {} of {} bytes. File ID for downloading is {}.\n", file_name, total_bytes_written, file_id ) )
 }
 
+async fn lookup_file_record( id: &str, db: &SqlitePool ) -> Result<SqliteRow, ( StatusCode, String )> {
+	match sqlx::query( "SELECT ID, FileName, UploadTime, FileSize FROM filetable WHERE ID = ?" )
+		.bind( id )
+		.fetch_optional( db )
+		.await {
+			Err( e ) => Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to search db, error: {}", e ) ) ),
+			Ok( None ) => Err( ( StatusCode::NOT_FOUND, "No file with that ID exists.".to_string() ) ),
+			Ok( Some( row ) ) => Ok( row )
+		}
+}
+
 async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
 	let id = match parsed_field.text().await {
 		Err( error_msg ) => {
@@ -390,13 +401,7 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 	};
 
 
-	let res: SqliteRow = match sqlx::query( "SELECT * FROM filetable WHERE ID = ?" ).bind( id ).fetch_optional( &state.database ).await.map_err( |e| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to search db, error: {}", e ) ) } ) {
-        Err( error_message ) => { return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_message ) ) ); }
-        Ok( res ) => match res {
-	        Some( found_res ) => found_res,
-	        None => { return Err( ( StatusCode::NOT_FOUND, format!( "No file with that ID exists." ) ) ); }
-        }
-    };
+	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
 
 	let file_id: String = res.get( "ID" );
 	let file_name: String = res.get( "FileName" );
@@ -420,13 +425,7 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 
 async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
     // println!( "{}", file_id );
-    let res: SqliteRow = match sqlx::query( "SELECT * FROM filetable WHERE ID = ?" ).bind( id ).fetch_optional( &state.database ).await.map_err( |e| { ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to search db, error: {}", e ) ) } ) {
-           Err( error_message ) => { return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_message ) ) ); }
-           Ok( res ) => match res {
-	        Some( found_res ) => found_res,
-	        None => { return Err( ( StatusCode::NOT_FOUND, format!( "No file with that ID exists." ) ) ); }
-           }
-       };
+    let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
 
 	let file_id: String = res.get( "ID" );
 	let file_name: String = res.get( "FileName" );
@@ -481,12 +480,8 @@ async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) ->
 
 		if field_name == "f" {
 			match upload_file( state, field ).await {
-				Err( error_message ) => {
-					return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "curl error location 2: {:?}\n", error_message ) ) );
-				}
-				Ok( message_from_uploader ) => {
-					return Ok( message_from_uploader )
-				}
+				Err( error_message ) => { return Err( error_message ); }
+				Ok( message_from_uploader ) => { return Ok( message_from_uploader ); }
 			}
 		}
 	}
@@ -550,10 +545,7 @@ async fn html_upload_processor( state: State<AppState>, mut part: Multipart ) ->
 
 				// and error is returning a tuple which puts StatusCode and String together
 				Err( error_msg ) => {
-					// returning Result<(StatusCode, String)>
-					return Err(
-						( StatusCode::INTERNAL_SERVER_ERROR, format!( "File upload failed. Error: {:?}", error_msg ) )
-					);
+					return Err( error_msg );
 				}
 			}
 		}
@@ -583,7 +575,7 @@ async fn html_download_processor( state: State<AppState>, mut part: Multipart ) 
 		if field_name == "file_download_field" {
 			match search_file( state, current_field ).await {
 				Err( error_message ) => {
-					return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Error with download form. Details: {:?}", error_message ) ) )
+					return Err( error_message )
 				}
 				Ok( message_from_uploader ) => {
 					return Ok( message_from_uploader )

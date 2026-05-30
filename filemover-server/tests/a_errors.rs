@@ -38,8 +38,8 @@ async fn test_upload_no_file_returns_400() {
 }
 
 #[tokio::test]
-async fn test_search_nonexistent_id_returns_error() {
-    println!( "-- POST /html_download_processor with bad ID (expect 404 or 500) --" );
+async fn test_search_nonexistent_id_returns_404() {
+    println!( "-- POST /html_download_processor with bad ID (expect 404) --" );
     let client = reqwest::Client::new();
 
     let form = reqwest::multipart::Form::new()
@@ -53,11 +53,7 @@ async fn test_search_nonexistent_id_returns_error() {
         .expect( "Request failed" );
 
     println!( "  status: {}", res.status() );
-    assert!(
-        res.status() == 404 || res.status() == 500,
-        "Expected 404 or 500, got {}",
-        res.status()
-    );
+    assert_eq!( res.status(), 404, "Expected 404, got {}", res.status() );
     println!( "  PASS" );
 }
 
