@@ -5,12 +5,11 @@ filemover.db
 filemover.db*
 
 plan.md
+DESIGN*
 
 target/
 
-uploads
+uploads/
 
 audit_log.txt
 test_output*
-
-
