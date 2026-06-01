@@ -1,18 +1,17 @@
-// Load test — 1000 requests in under 5 seconds.
-// Spawns its own in-process server with no rate limiting so all requests hit real handlers.
+// Load tests — stress the server with large file uploads, real disk-backed downloads,
+// concurrent mixed operations, and sustained multi-wave throughput.
+// Each test spawns its own in-process server with a unique in-memory DB so tests
+// can run in parallel without cross-contamination.
 // Pass condition: zero 5xx, zero connection errors, completion within time budget.
 // Results are written to audit_log.txt after each test.
 
+#[cfg(unix)]
+use libc;
+
 use std::{
-	io::{
-		Write
-	},
-	net::{
-		SocketAddr
-	},
-	str::{
-		FromStr
-	},
+	io::Write,
+	net::SocketAddr,
+	str::FromStr,
 	sync::{
 		atomic::{
 			AtomicU32,
@@ -36,9 +35,7 @@ use filemover_server::{
 
 use sqlx::{
 	SqlitePool,
-	sqlite::{
-		SqliteConnectOptions
-	}
+	sqlite::SqliteConnectOptions
 };
 
 use reqwest::{
@@ -51,18 +48,22 @@ use reqwest::{
 
 use tokio::{
 	spawn,
-	fs::{
-		create_dir_all
-	},
-	net::{
-		TcpListener
-	}
+	fs::create_dir_all,
+	net::TcpListener
 };
 
-static TRACING: std::sync::Once = std::sync::Once::new();
+static TRACING:    std::sync::Once = std::sync::Once::new();
+static TEST_DB_ID: AtomicU32       = AtomicU32::new( 0 );
 
 fn init_tracing() {
 	TRACING.call_once(|| {
+		#[cfg(unix)]
+		unsafe {
+			let mut rlim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+			libc::getrlimit( libc::RLIMIT_NOFILE, &mut rlim );
+			rlim.rlim_cur = rlim.rlim_max.min( 10_240 );
+			libc::setrlimit( libc::RLIMIT_NOFILE, &rlim );
+		}
 		let _ = tracing_subscriber::fmt()
 			.with_test_writer()
 			.with_env_filter( "info" )
@@ -133,7 +134,7 @@ impl Stats {
 			+ self.connection_error.load( Ordering::Relaxed )
 	}
 
-	fn server_errors( &self )    -> u32 { self.server_error.load( Ordering::Relaxed ) }
+	fn server_errors( &self )     -> u32 { self.server_error.load( Ordering::Relaxed ) }
 	fn connection_errors( &self ) -> u32 { self.connection_error.load( Ordering::Relaxed ) }
 
 	fn latency_stats( &self ) -> LatencyStats {
@@ -253,12 +254,14 @@ RESULT    : {}\n\
 	write_audit( &entry );
 }
 
-
-
 async fn start_test_server() -> String {
-	let opts = SqliteConnectOptions::from_str( "sqlite:file:loadtest?mode=memory&cache=shared" )
-		.unwrap()
-		.create_if_missing( true );
+	let db_id = TEST_DB_ID.fetch_add( 1, Ordering::Relaxed );
+
+	let opts = SqliteConnectOptions::from_str(
+		&format!( "sqlite:file:loadtest_{db_id}?mode=memory&cache=shared" )
+	)
+	.unwrap()
+	.create_if_missing( true );
 
 	let pool = SqlitePool::connect_with( opts ).await.unwrap();
 
@@ -280,154 +283,91 @@ async fn start_test_server() -> String {
 
 fn make_client() -> Client {
 	Client::builder()
-		.timeout( Duration::from_secs( 10 ) )
+		.timeout( Duration::from_secs( 60 ) )
 		.pool_max_idle_per_host( 200 )
 		.build()
 		.unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn test_load_1000_ping_burst() {
-	init_tracing();
-	const COUNT: usize = 1000;
-	const TIME_CONSTRAINT: Duration = Duration::from_secs( 5 );
+fn parse_file_id( body: &str ) -> Option<String> {
+	body.split( "File ID for downloading is " )
+		.nth( 1 )
+		.and_then( |s| s.split( '.' ).next() )
+		.map( |s| s.trim().to_string() )
+}
 
-	let base_url = start_test_server().await;
-	println!( "-- Load test: {} concurrent GET /ping in <{}s --", COUNT, TIME_CONSTRAINT.as_secs() );
-
-	let client = Arc::new( make_client() );
-	let stats = Stats::new();
-	let start = Instant::now();
-
-	let mut handles = Vec::with_capacity( COUNT );
-	for _ in 0..COUNT {
-		let client = Arc::clone( &client );
-		let stats = Arc::clone( &stats );
-		let url = format!( "{}/ping", base_url );
-
-		handles.push( spawn( async move {
-			let t = Instant::now();
-			match client.get( url ).send().await {
-				Ok( r )  => stats.record( r.status().as_u16(), t.elapsed().as_micros() as u64 ),
-				Err( _ ) => stats.record_conn_err( t.elapsed().as_micros() as u64 ),
-			}
-		} ) );
+async fn seed_files( base_url: &str, client: &Client, count: usize, file_size: usize ) -> Vec<String> {
+	let mut ids = Vec::with_capacity( count );
+	for _ in 0..count {
+		let form = Form::new().part(
+			"f",
+			Part::bytes( vec![ 0xABu8; file_size ] ).file_name( "seed.bin" ),
+		);
+		let body = client
+			.post( format!( "{}/curlup", base_url ) )
+			.multipart( form )
+			.send()
+			.await
+			.expect( "seed upload failed" )
+			.text()
+			.await
+			.expect( "seed response read failed" );
+		let id = parse_file_id( &body ).expect( "could not parse file ID from seed response" );
+		ids.push( id );
 	}
+	ids
+}
 
-	for h in handles { h.await.unwrap(); }
-
-	let elapsed = start.elapsed();
-	println!( "  Completed in {:.3}s", elapsed.as_secs_f64() );
-	stats.print_to_stdout( COUNT );
-
-	let passed = elapsed < TIME_CONSTRAINT
-		&& stats.server_errors() == 0
-		&& stats.connection_errors() == 0;
-
-	write_test_audit(
-		"test_load_1000_ping_burst",
-		&format!( "requests={COUNT}, time_constraint={}s", TIME_CONSTRAINT.as_secs() ),
-		&stats, COUNT, elapsed, passed,
-	);
-
-	assert!( elapsed < TIME_CONSTRAINT, "{COUNT} requests took {:.2}s — exceeded {}s time constraint", elapsed.as_secs_f64(), TIME_CONSTRAINT.as_secs() );
-	assert_eq!( stats.server_errors(), 0, "Server returned 5xx under load" );
-	assert_eq!( stats.connection_errors(), 0, "Connection errors under load" );
-	println!( "  PASS" );
+async fn cleanup_file_ids( ids: &[String] ) {
+	for id in ids {
+		let _ = tokio::fs::remove_dir_all( format!( "./uploads/temp/{}", id ) ).await;
+	}
 }
 
 
 
-
+// 50 concurrent uploads of 2 MB each — stresses multipart parsing, disk writes, and SQLite inserts.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn test_load_1000_mixed_endpoints() {
+async fn test_load_large_file_uploads() {
 	init_tracing();
-
-	const COUNT: usize = 1000;
-	const TIME_CONSTRAINT: Duration = Duration::from_secs( 5 );
+	const COUNT:     usize    = 50;
+	const FILE_SIZE: usize    = 2 * 1024 * 1024;
+	const TIME_CONSTRAINT:    Duration = Duration::from_secs( 30 );
 
 	let base_url = start_test_server().await;
-	println!( "-- Load test: {} mixed requests (ping + 404 downloads) in <{}s --", COUNT, TIME_CONSTRAINT.as_secs() );
-
-	let client = Arc::new( make_client() );
-	let stats = Stats::new();
-	let start = Instant::now();
-
-	let mut handles = Vec::with_capacity( COUNT );
-
-	for i in 0..COUNT {
-		let client = Arc::clone( &client );
-		let stats = Arc::clone( &stats );
-		let url_ping = format!( "{}/ping", base_url );
-		let url_dl   = format!( "{}/download/xxxxxxxx", base_url );
-
-		handles.push( spawn( async move {
-			let t = Instant::now();
-
-			let res = if i % 2 == 0 {
-				client.get( url_ping ).send().await
-			} else {
-				client.get( url_dl ).send().await
-			};
-
-			match res {
-				Ok( r )  => stats.record( r.status().as_u16(), t.elapsed().as_micros() as u64 ),
-				Err( _ ) => stats.record_conn_err( t.elapsed().as_micros() as u64 ),
-			}
-		} ) );
-	}
-
-	for h in handles { h.await.unwrap(); }
-
-	let elapsed = start.elapsed();
-	println!( "  Completed in {:.3}s", elapsed.as_secs_f64() );
-	stats.print_to_stdout( COUNT );
-
-	let passed = elapsed < TIME_CONSTRAINT
-		&& stats.server_errors() == 0
-		&& stats.connection_errors() == 0;
-
-	write_test_audit(
-		"test_load_1000_mixed_endpoints",
-		&format!( "requests={COUNT} (50% ping / 50% download-404), budget={}s", TIME_CONSTRAINT.as_secs() ),
-		&stats, COUNT, elapsed, passed,
+	println!(
+		"-- Load test: {} concurrent {}MB uploads in <{}s --",
+		COUNT, FILE_SIZE / ( 1024 * 1024 ), TIME_CONSTRAINT.as_secs()
 	);
 
-	assert!( elapsed < TIME_CONSTRAINT, "{COUNT} mixed requests took {:.2}s — exceeded {}s budget", elapsed.as_secs_f64(), TIME_CONSTRAINT.as_secs() );
-	assert_eq!( stats.server_errors(), 0, "Server returned 5xx under mixed load" );
-	assert_eq!( stats.connection_errors(), 0, "Connection errors under mixed load" );
-	println!( "  PASS" );
-}
-
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn test_load_200_concurrent_uploads() {
-	init_tracing();
-	const COUNT: usize = 200;
-	const TIME_CONSTRAINT: Duration = Duration::from_secs( 10 );
-
-	let base_url = start_test_server().await;
-	println!( "-- Load test: {} concurrent small-file uploads in <{}s --", COUNT, TIME_CONSTRAINT.as_secs() );
-
-	let client = Arc::new( make_client() );
-	let stats = Stats::new();
-	let start = Instant::now();
+	let client       = Arc::new( make_client() );
+	let stats        = Stats::new();
+	let uploaded_ids: Arc<Mutex<Vec<String>>> = Arc::new( Mutex::new( Vec::new() ) );
+	let start        = Instant::now();
 
 	let mut handles = Vec::with_capacity( COUNT );
 	for _ in 0..COUNT {
-		let client = Arc::clone( &client );
-		let stats = Arc::clone( &stats );
-		let url = format!( "{}/curlup", base_url );
-		handles.push( spawn( async move {
-			let t = Instant::now();
+		let client      = Arc::clone( &client );
+		let stats       = Arc::clone( &stats );
+		let ids         = Arc::clone( &uploaded_ids );
+		let url         = format!( "{}/curlup", base_url );
 
+		handles.push( spawn( async move {
+			let t    = Instant::now();
 			let form = Form::new().part(
 				"f",
-				Part::bytes( vec![ 0xABu8; 512 ] ).file_name( "loadtest.bin" ),
+				Part::bytes( vec![ 0xABu8; FILE_SIZE ] ).file_name( "loadtest.bin" ),
 			);
-
 			match client.post( url ).multipart( form ).send().await {
-				Ok( r )  => stats.record( r.status().as_u16(), t.elapsed().as_micros() as u64 ),
+				Ok( r ) => {
+					let status = r.status().as_u16();
+					if let Ok( body ) = r.text().await {
+						if let Some( id ) = parse_file_id( &body ) {
+							ids.lock().unwrap().push( id );
+						}
+					}
+					stats.record( status, t.elapsed().as_micros() as u64 );
+				}
 				Err( _ ) => stats.record_conn_err( t.elapsed().as_micros() as u64 ),
 			}
 		} ) );
@@ -439,67 +379,292 @@ async fn test_load_200_concurrent_uploads() {
 	println!( "  Completed in {:.3}s", elapsed.as_secs_f64() );
 	stats.print_to_stdout( COUNT );
 
+	let ids = uploaded_ids.lock().unwrap().clone();
+	cleanup_file_ids( &ids ).await;
+
 	let passed = elapsed < TIME_CONSTRAINT
 		&& stats.server_errors() == 0
 		&& stats.connection_errors() == 0;
 
 	write_test_audit(
-		"test_load_200_concurrent_uploads",
-		&format!( "requests={COUNT} (512-byte uploads), time_constraint={}s", TIME_CONSTRAINT.as_secs() ),
+		"test_load_large_file_uploads",
+		&format!( "requests={COUNT}, file_size={}MB, time_constraint={}s", FILE_SIZE / ( 1024 * 1024 ), TIME_CONSTRAINT.as_secs() ),
 		&stats, COUNT, elapsed, passed,
 	);
 
 	assert!( elapsed < TIME_CONSTRAINT, "{COUNT} uploads took {:.2}s — exceeded {}s time constraint", elapsed.as_secs_f64(), TIME_CONSTRAINT.as_secs() );
-	assert_eq!( stats.server_errors(), 0, "Server returned 5xx during upload" );
-	assert_eq!( stats.connection_errors(), 0, "Connection errors during upload" );
+	assert_eq!( stats.server_errors(), 0, "Server returned 5xx during large uploads" );
+	assert_eq!( stats.connection_errors(), 0, "Connection errors during large uploads" );
 	println!( "  PASS" );
 }
 
 
+
+// 200 concurrent downloads of real 2 MB files from disk — stresses DB reads and streaming I/O.
+// Seeds 8 files first, then cycles downloads across the pool so every request hits a real file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_load_concurrent_downloads() {
+	init_tracing();
+	const SEED_COUNT:     usize    = 8;
+	const SEED_SIZE:      usize    = 2 * 1024 * 1024;
+	const DOWNLOAD_COUNT: usize    = 200;
+	const TIME_CONSTRAINT:         Duration = Duration::from_secs( 20 );
+
+	let base_url = start_test_server().await;
+	let client   = Arc::new( make_client() );
+
+	println!(
+		"-- Seeding {} files of {}MB --",
+		SEED_COUNT, SEED_SIZE / ( 1024 * 1024 )
+	);
+	let file_ids = Arc::new( seed_files( &base_url, &client, SEED_COUNT, SEED_SIZE ).await );
+
+	println!(
+		"-- Load test: {} concurrent downloads cycling {} real files in <{}s --",
+		DOWNLOAD_COUNT, SEED_COUNT, TIME_CONSTRAINT.as_secs()
+	);
+
+	let stats = Stats::new();
+	let start = Instant::now();
+
+	let mut handles = Vec::with_capacity( DOWNLOAD_COUNT );
+	for i in 0..DOWNLOAD_COUNT {
+		let client   = Arc::clone( &client );
+		let stats    = Arc::clone( &stats );
+		let id       = file_ids[ i % SEED_COUNT ].clone();
+		let url      = format!( "{}/download/{}", base_url, id );
+
+		handles.push( spawn( async move {
+			let t = Instant::now();
+			match client.get( url ).send().await {
+				Ok( r ) => {
+					let status = r.status().as_u16();
+					let _ = r.bytes().await; // stream the full body to exercise disk I/O
+					stats.record( status, t.elapsed().as_micros() as u64 );
+				}
+				Err( _ ) => stats.record_conn_err( t.elapsed().as_micros() as u64 ),
+			}
+		} ) );
+	}
+
+	for h in handles { h.await.unwrap(); }
+
+	let elapsed = start.elapsed();
+	println!( "  Completed in {:.3}s", elapsed.as_secs_f64() );
+	stats.print_to_stdout( DOWNLOAD_COUNT );
+
+	cleanup_file_ids( &file_ids ).await;
+
+	let passed = elapsed < TIME_CONSTRAINT
+		&& stats.server_errors() == 0
+		&& stats.connection_errors() == 0;
+
+	write_test_audit(
+		"test_load_concurrent_downloads",
+		&format!( "downloads={DOWNLOAD_COUNT}, pool={SEED_COUNT} files of {}MB, time_constraint={}s", SEED_SIZE / ( 1024 * 1024 ), TIME_CONSTRAINT.as_secs() ),
+		&stats, DOWNLOAD_COUNT, elapsed, passed,
+	);
+
+	assert!( elapsed < TIME_CONSTRAINT, "{DOWNLOAD_COUNT} downloads took {:.2}s — exceeded {}s time constraint", elapsed.as_secs_f64(), TIME_CONSTRAINT.as_secs() );
+	assert_eq!( stats.server_errors(), 0, "Server returned 5xx during concurrent downloads" );
+	assert_eq!( stats.connection_errors(), 0, "Connection errors during concurrent downloads" );
+	println!( "  PASS" );
+}
+
+
+
+// 100 concurrent tasks — 50 uploads of 1 MB and 50 downloads from a pre-seeded pool,
+// all in-flight at the same time. Stresses the server under simultaneous read+write pressure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_load_mixed_upload_download() {
+	init_tracing();
+	const SEED_COUNT:  usize    = 10;
+	const SEED_SIZE:   usize    = 1 * 1024 * 1024;
+	const UPLOAD_SIZE: usize    = 1 * 1024 * 1024;
+	const CONCURRENT:  usize    = 100;
+	const TIME_CONSTRAINT:      Duration = Duration::from_secs( 25 );
+
+	let base_url = start_test_server().await;
+	let client   = Arc::new( make_client() );
+
+	println!(
+		"-- Seeding {} files of {}MB for mixed test --",
+		SEED_COUNT, SEED_SIZE / ( 1024 * 1024 )
+	);
+	let seeded_ids = Arc::new( seed_files( &base_url, &client, SEED_COUNT, SEED_SIZE ).await );
+
+	println!(
+		"-- Load test: {} concurrent mixed ({} uploads {}MB + {} downloads) in <{}s --",
+		CONCURRENT, CONCURRENT / 2, UPLOAD_SIZE / ( 1024 * 1024 ), CONCURRENT / 2, TIME_CONSTRAINT.as_secs()
+	);
+
+	let stats        = Stats::new();
+	let uploaded_ids: Arc<Mutex<Vec<String>>> = Arc::new( Mutex::new( Vec::new() ) );
+	let start        = Instant::now();
+
+	let mut handles = Vec::with_capacity( CONCURRENT );
+	for i in 0..CONCURRENT {
+		let client      = Arc::clone( &client );
+		let stats       = Arc::clone( &stats );
+		let seeded      = Arc::clone( &seeded_ids );
+		let upload_ids  = Arc::clone( &uploaded_ids );
+		let base        = base_url.clone();
+
+		handles.push( spawn( async move {
+			let t = Instant::now();
+
+			if i % 2 == 0 {
+				let form = Form::new().part(
+					"f",
+					Part::bytes( vec![ 0xCDu8; UPLOAD_SIZE ] ).file_name( "mixed.bin" ),
+				);
+				match client.post( format!( "{}/curlup", base ) ).multipart( form ).send().await {
+					Ok( r ) => {
+						let status = r.status().as_u16();
+						if let Ok( body ) = r.text().await {
+							if let Some( id ) = parse_file_id( &body ) {
+								upload_ids.lock().unwrap().push( id );
+							}
+						}
+						stats.record( status, t.elapsed().as_micros() as u64 );
+					}
+					Err( _ ) => stats.record_conn_err( t.elapsed().as_micros() as u64 ),
+				}
+			} else {
+				let id  = seeded[ i % SEED_COUNT ].clone();
+				let url = format!( "{}/download/{}", base, id );
+				match client.get( url ).send().await {
+					Ok( r ) => {
+						let status = r.status().as_u16();
+						let _ = r.bytes().await;
+						stats.record( status, t.elapsed().as_micros() as u64 );
+					}
+					Err( _ ) => stats.record_conn_err( t.elapsed().as_micros() as u64 ),
+				}
+			}
+		} ) );
+	}
+
+	for h in handles { h.await.unwrap(); }
+
+	let elapsed = start.elapsed();
+	println!( "  Completed in {:.3}s", elapsed.as_secs_f64() );
+	stats.print_to_stdout( CONCURRENT );
+
+	let mut all_ids: Vec<String> = (*seeded_ids).clone();
+	all_ids.extend( uploaded_ids.lock().unwrap().clone() );
+	cleanup_file_ids( &all_ids ).await;
+
+	let passed = elapsed < TIME_CONSTRAINT
+		&& stats.server_errors() == 0
+		&& stats.connection_errors() == 0;
+
+	write_test_audit(
+		"test_load_mixed_upload_download",
+		&format!( "concurrent={CONCURRENT} (50% upload {}MB / 50% download), time_constraint={}s", UPLOAD_SIZE / ( 1024 * 1024 ), TIME_CONSTRAINT.as_secs() ),
+		&stats, CONCURRENT, elapsed, passed,
+	);
+
+	assert!( elapsed < TIME_CONSTRAINT, "{CONCURRENT} mixed ops took {:.2}s — exceeded {}s time constraint", elapsed.as_secs_f64(), TIME_CONSTRAINT.as_secs() );
+	assert_eq!( stats.server_errors(), 0, "Server returned 5xx during mixed load" );
+	assert_eq!( stats.connection_errors(), 0, "Connection errors during mixed load" );
+	println!( "  PASS" );
+}
+
+
+
+// 4 waves — each wave uploads 10 files of 1 MB concurrently, then immediately downloads
+// all of them concurrently. Tests that throughput stays consistent across sustained load
+// and that the server handles interleaved write-then-read cycles cleanly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_load_sustained_throughput() {
 	init_tracing();
-	const WAVES:    usize    = 4;
-	const PER_WAVE: usize    = 250;
-	const TOTAL:    usize    = WAVES * PER_WAVE;
-	const TIME_CONSTRAINT:   Duration = Duration::from_secs( 5 );
+	const WAVES:            usize    = 4;
+	const UPLOADS_PER_WAVE: usize    = 50;
+	const FILE_SIZE:        usize    = 1 * 1024 * 1024;
+	const TIME_CONSTRAINT:           Duration = Duration::from_secs( 45 );
 
-	let base_url = start_test_server().await;
-	println!(
-		"-- Load test: {} waves of {} ping requests ({} total), sustained in <{}s --",
-		WAVES, PER_WAVE, TOTAL, TIME_CONSTRAINT.as_secs()
-	);
-
-	let client = Arc::new( make_client() );
-	let total_stats = Stats::new();
+	let base_url     = start_test_server().await;
+	let client       = Arc::new( make_client() );
+	let total_stats  = Stats::new();
+	let all_ids: Arc<Mutex<Vec<String>>> = Arc::new( Mutex::new( Vec::new() ) );
 	let overall_start = Instant::now();
+
+	println!(
+		"-- Load test: {} waves of {} uploads ({}MB) then download all, in <{}s --",
+		WAVES, UPLOADS_PER_WAVE, FILE_SIZE / ( 1024 * 1024 ), TIME_CONSTRAINT.as_secs()
+	);
 
 	for wave in 0..WAVES {
 		let wave_start = Instant::now();
-		let mut handles = Vec::with_capacity( PER_WAVE );
+		let wave_ids: Arc<Mutex<Vec<String>>> = Arc::new( Mutex::new( Vec::new() ) );
 
-		for _ in 0..PER_WAVE {
-			let client = Arc::clone( &client );
-			let stats  = Arc::clone( &total_stats );
-			let url    = format!( "{}/ping", base_url );
+		let mut upload_handles = Vec::with_capacity( UPLOADS_PER_WAVE );
+		for _ in 0..UPLOADS_PER_WAVE {
+			let client    = Arc::clone( &client );
+			let stats     = Arc::clone( &total_stats );
+			let ids       = Arc::clone( &wave_ids );
+			let url       = format!( "{}/curlup", base_url );
 
-			handles.push( spawn( async move {
-				let t = Instant::now();
-				match client.get( url ).send().await {
-					Ok( r )  => stats.record( r.status().as_u16(), t.elapsed().as_micros() as u64 ),
+			upload_handles.push( spawn( async move {
+				let t    = Instant::now();
+				let form = Form::new().part(
+					"f",
+					Part::bytes( vec![ 0xEFu8; FILE_SIZE ] ).file_name( "wave.bin" ),
+				);
+				match client.post( url ).multipart( form ).send().await {
+					Ok( r ) => {
+						let status = r.status().as_u16();
+						if let Ok( body ) = r.text().await {
+							if let Some( id ) = parse_file_id( &body ) {
+								ids.lock().unwrap().push( id );
+							}
+						}
+						stats.record( status, t.elapsed().as_micros() as u64 );
+					}
 					Err( _ ) => stats.record_conn_err( t.elapsed().as_micros() as u64 ),
 				}
 			} ) );
 		}
+		for h in upload_handles { h.await.unwrap(); }
 
-		for h in handles { h.await.unwrap(); }
+		let wave_id_list    = wave_ids.lock().unwrap().clone();
+		let download_count  = wave_id_list.len();
+		let mut dl_handles  = Vec::with_capacity( download_count );
 
-		println!( "  Wave {} done — {:.0}ms", wave + 1, wave_start.elapsed().as_millis() );
+		for id in &wave_id_list {
+			let client = Arc::clone( &client );
+			let stats  = Arc::clone( &total_stats );
+			let url    = format!( "{}/download/{}", base_url, id );
+
+			dl_handles.push( spawn( async move {
+				let t = Instant::now();
+				match client.get( url ).send().await {
+					Ok( r ) => {
+						let status = r.status().as_u16();
+						let _ = r.bytes().await;
+						stats.record( status, t.elapsed().as_micros() as u64 );
+					}
+					Err( _ ) => stats.record_conn_err( t.elapsed().as_micros() as u64 ),
+				}
+			} ) );
+		}
+		for h in dl_handles { h.await.unwrap(); }
+
+		all_ids.lock().unwrap().extend( wave_id_list );
+		println!(
+			"  Wave {} done ({} uploads + {} downloads) — {:.0}ms",
+			wave + 1, UPLOADS_PER_WAVE, download_count, wave_start.elapsed().as_millis()
+		);
 	}
 
-	let elapsed = overall_start.elapsed();
-	println!( "  All {} requests completed in {:.3}s", TOTAL, elapsed.as_secs_f64() );
-	total_stats.print_to_stdout( TOTAL );
+	let elapsed    = overall_start.elapsed();
+	let total_ops  = WAVES * UPLOADS_PER_WAVE * 2;
+	println!( "  All {} ops completed in {:.3}s", total_ops, elapsed.as_secs_f64() );
+	total_stats.print_to_stdout( total_ops );
+
+	let ids = all_ids.lock().unwrap().clone();
+	cleanup_file_ids( &ids ).await;
 
 	let passed = elapsed < TIME_CONSTRAINT
 		&& total_stats.server_errors() == 0
@@ -507,8 +672,8 @@ async fn test_load_sustained_throughput() {
 
 	write_test_audit(
 		"test_load_sustained_throughput",
-		&format!( "waves={WAVES}, per_wave={PER_WAVE}, total={TOTAL}, time_constraint={}s", TIME_CONSTRAINT.as_secs() ),
-		&total_stats, TOTAL, elapsed, passed,
+		&format!( "waves={WAVES}, uploads_per_wave={UPLOADS_PER_WAVE}, file_size={}MB, time_constraint={}s", FILE_SIZE / ( 1024 * 1024 ), TIME_CONSTRAINT.as_secs() ),
+		&total_stats, total_ops, elapsed, passed,
 	);
 
 	assert!( elapsed < TIME_CONSTRAINT, "Sustained load took {:.2}s — exceeded {}s time constraint", elapsed.as_secs_f64(), TIME_CONSTRAINT.as_secs() );

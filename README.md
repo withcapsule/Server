@@ -7,4 +7,7 @@ Possible names for getting a domain later:
 - FileMover
 - IdharUdhar (Punjabi words for here-there)
 
+Tests:
+- `cargo test -- --nocapture 2>&1 | tee test_output_3.txt`
+
 
