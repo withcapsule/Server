@@ -35,10 +35,8 @@ use filemover_server::{
 };
 
 use sqlx::{
-	Row,
 	SqlitePool,
 	sqlite::{
-		SqliteRow,
 		SqliteConnectOptions
 	}
 };
@@ -420,12 +418,12 @@ async fn test_load_200_concurrent_uploads() {
 		let client = Arc::clone( &client );
 		let stats = Arc::clone( &stats );
 		let url = format!( "{}/curlup", base_url );
-		handles.push( tokio::spawn( async move {
+		handles.push( spawn( async move {
 			let t = Instant::now();
 
-			let form = reqwest::multipart::Form::new().part(
+			let form = Form::new().part(
 				"f",
-				reqwest::multipart::Part::bytes( vec![ 0xABu8; 512 ] ).file_name( "loadtest.bin" ),
+				Part::bytes( vec![ 0xABu8; 512 ] ).file_name( "loadtest.bin" ),
 			);
 
 			match client.post( url ).multipart( form ).send().await {
