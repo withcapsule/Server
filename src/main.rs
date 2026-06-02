@@ -78,7 +78,7 @@ async fn main() {
 		Ok( db ) => db
 	} };
 
-	sqlx::query( "CREATE TABLE IF NOT EXISTS filetable (ID VARCHAR(16) PRIMARY KEY, FileName VARCHAR(64) NOT NULL, UploadTime INTEGER NOT NULL, FileSize INTEGER NOT NULL)" )
+	sqlx::query( "CREATE TABLE IF NOT EXISTS filetable (ID VARCHAR(16) PRIMARY KEY, FileName VARCHAR(64) NOT NULL, UploadTime INTEGER NOT NULL, FileSize INTEGER NOT NULL, IsEncrypted INTEGER NOT NULL DEFAULT 0)" )
 		.execute( &state.database ).await.expect( "Failed to create table; as table didn't exist." );
 
 	create_dir_all( "./uploads/temp" ).await.unwrap();

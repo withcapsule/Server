@@ -14,6 +14,7 @@ use axum::{
 		DefaultBodyLimit,
 		Multipart,
 		Path,
+		Query,
 		Request,
 		State,
 		multipart::{
@@ -96,6 +97,11 @@ use sqlx::{
 #[derive(Clone)]
 pub struct AppState {
 	pub database: SqlitePool,
+}
+
+#[derive(serde::Deserialize)]
+struct UploadQuery {
+	encrypted: Option<bool>,
 }
 
 async fn pong() -> Json<Value> {
@@ -270,7 +276,7 @@ async fn html_downloader_form() -> Html<&'static str> {
 	)
 }
 
-async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
+async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'_>, is_encrypted: bool ) -> Result<String, ( StatusCode, String )> {
 	let file_id: String = rand::rng().sample_iter( Alphanumeric ).take( 8 ).map( char::from ).collect();
 	let file_name = parsed_field.file_name().unwrap_or( "__failure_upload_file()__" ).to_string();
 
@@ -317,11 +323,12 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 
 	info!( file_name, file_id, bytes = total_bytes_written, chunks = chunk_loops - 1, "upload complete" );
 
-	if let Err( error_message ) = sqlx::query( "INSERT INTO filetable(ID, FileName, UploadTime, FileSize) VALUES(?, ?, ?, ?)" )
+	if let Err( error_message ) = sqlx::query( "INSERT INTO filetable(ID, FileName, UploadTime, FileSize, IsEncrypted) VALUES(?, ?, ?, ?, ?)" )
 		.bind( &file_id )
 		.bind( &file_name )
 		.bind( upload_time as i64 )
 		.bind( total_bytes_written as i64 )
+		.bind( is_encrypted )
 		.execute( &state.database )
 		.await {
 			remove_file( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await.ok();
@@ -333,7 +340,7 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 }
 
 async fn lookup_file_record( id: &str, db: &SqlitePool ) -> Result<SqliteRow, ( StatusCode, String )> {
-	match sqlx::query( "SELECT ID, FileName, UploadTime, FileSize FROM filetable WHERE ID = ?" )
+	match sqlx::query( "SELECT ID, FileName, UploadTime, FileSize, IsEncrypted FROM filetable WHERE ID = ?" )
 		.bind( id )
 		.fetch_optional( db )
 		.await {
@@ -375,8 +382,9 @@ async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Re
 	let file_id: String = res.get( "ID" );
 	let file_name: String = res.get( "FileName" );
 	let file_size: i64 = res.get( "FileSize" );
+	let is_encrypted: bool = res.get( "IsEncrypted" );
 
-	info!( file_id, file_name, file_size, "download started" );
+	info!( file_id, file_name, file_size, is_encrypted, "download started" );
 
 	let file_to_send = match File::open( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await {
 		Err( error_msg ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "unable to open file, details: {}", error_msg ) ) ) }
@@ -391,13 +399,16 @@ async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Re
 		.header( "Content-Type", "application/octet-stream" )
 		.header( "Content-Length", file_size )
 		.header( "Content-Disposition", format!( "attachment; filename=\"{}\"", file_name ) )
+		.header( "X-Encrypted", if is_encrypted { "true" } else { "false" } )
 		.body( file_body )
 		.unwrap();
 
 	return Ok( response_object );
 }
 
-async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+async fn curl_upload_processor( state: State<AppState>, Query( query ): Query<UploadQuery>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+	let is_encrypted = query.encrypted.unwrap_or( false );
+
 	loop {
 		let parts_of_curl = part.next_field().await;
 
@@ -414,7 +425,7 @@ async fn curl_upload_processor( state: State<AppState>, mut part: Multipart ) ->
 		let field_name = field.name().unwrap_or( "unknown" ).to_string();
 
 		if field_name == "f" {
-			match upload_file( state, field ).await {
+			match upload_file( state, field, is_encrypted ).await {
 				Err( error_message ) => { return Err( error_message ); }
 				Ok( message_from_uploader ) => { return Ok( message_from_uploader ); }
 			}
@@ -441,7 +452,7 @@ async fn html_upload_processor( state: State<AppState>, mut part: Multipart ) ->
 		let current_field_name = current_field.name().unwrap_or( "unknown" ).to_string();
 
 		if current_field_name == "file_upload_field" {
-			match upload_file( state, current_field ).await {
+			match upload_file( state, current_field, false ).await {
 				Ok( message_from_uploader ) => { return Ok( message_from_uploader ); }
 				Err( error_msg ) => { return Err( error_msg ); }
 			}
@@ -594,6 +605,6 @@ pub fn build_router( state: AppState ) -> Router {
 			CorsLayer::new()
 				.allow_origin( "http://localhost:3000".parse::<HeaderValue>().unwrap() )
 				.allow_methods( [ Method::GET, Method::POST ] )
-				.expose_headers( [ header::CONTENT_DISPOSITION ] )
+				.expose_headers( [ header::CONTENT_DISPOSITION, axum::http::HeaderName::from_static( "x-encrypted" ) ] )
 		)
 }
