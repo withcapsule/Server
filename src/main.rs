@@ -53,7 +53,7 @@ use tracing_subscriber::{
 	EnvFilter
 };
 
-use filemover_server::{
+use capsule_server::{
 	AppState,
 	add_retry_after,
 	build_router,
@@ -66,7 +66,7 @@ async fn main() {
 		.with_env_filter( EnvFilter::from_default_env().add_directive( "info".parse().unwrap() ) )
 		.init();
 
-	let options = SqliteConnectOptions::from_str( "sqlite:filemover.db" )
+	let options = SqliteConnectOptions::from_str( "sqlite:capsule.db" )
 		.expect( "Expected to create db, failed" )
 		.create_if_missing( true )
 		.journal_mode( Wal )

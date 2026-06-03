@@ -1,11 +1,8 @@
 node_modules
 .DS_Store
 
-filemover.db
-filemover.db*
-
-plan.md
-DESIGN*
+capsule.db
+capsule.db*
 
 target/
 

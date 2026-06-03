@@ -29,7 +29,7 @@ use std::{
 	}
 };
 
-use filemover_server::{
+use capsule_server::{
 	AppState, build_router
 };
 

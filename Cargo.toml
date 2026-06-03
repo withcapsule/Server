@@ -1,5 +1,5 @@
 [package]
-name = "filemover-server"
+name = "capsule-server"
 version = "0.1.0"
 edition = "2024"
 
