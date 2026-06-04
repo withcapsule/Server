@@ -376,6 +376,27 @@ async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Resul
 	}
 }
 
+async fn file_status( state: State<AppState>, Path( id ): Path<String> ) -> Result<Json<serde_json::Value>, ( StatusCode, String )> {
+	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
+
+	let file_name: String = res.get( "FileName" );
+	let file_size: i64    = res.get( "FileSize" );
+	let upload_time: i64  = res.get( "UploadTime" );
+	let is_encrypted: bool = res.get( "IsEncrypted" );
+
+	const EXPIRY_SECS: i64 = 3600;
+	let now = SystemTime::now().duration_since( SystemTime::UNIX_EPOCH ).map( |d| d.as_secs() as i64 ).unwrap_or( 0 );
+	let time_remaining = ( upload_time + EXPIRY_SECS - now ).max( 0 );
+
+	Ok( Json( json!( {
+		"file_name":      file_name,
+		"file_size":      file_size,
+		"upload_time":    upload_time,
+		"time_remaining": time_remaining,
+		"is_encrypted":   is_encrypted,
+	} ) ) )
+}
+
 async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
 	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
 
@@ -587,6 +608,7 @@ pub fn spawn_cleanup_task( db: SqlitePool ) {
 pub fn build_router( state: AppState ) -> Router {
 	Router::new()
 		.route( "/ping", get( pong ) )
+		.route( "/status/{file_id}", get( file_status ) )
 		.route( "/download/{file_id}", get( download_file ) )
 		.route( "/curlup", post( curl_upload_processor ) )
 		.route( "/html_uploader_form", get( html_uploader_form ) )
