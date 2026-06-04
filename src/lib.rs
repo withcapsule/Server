@@ -410,38 +410,23 @@ async fn delete_file( state: State<AppState>, Path( id ): Path<String> ) -> Resu
 		Ok( file ) => file
 	};
 
-	if file_exists {
-		match remove_file( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await {
-			Err( error ) => {
-				println!( "Error in cleanup with file id {} | more info: {}", file_id, error );
-				match sqlx::query( "DELETE FROM filetable WHERE ID = ?" ).bind( file_id.to_string() ).execute( &state.database ).await {
-					Ok(..) => {
-						println!( "File {} removed and database updated", file_id );
-						match remove_dir( format!( "./uploads/temp/{}", file_id ) ).await {
-							Ok(()) => { return Ok( format!("File {} directory deleted", file_id )); }
-							Err( error_msg ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "File {} directory deletion failed. Details: {}", file_id, error_msg ) ) ); }
-						}
-					}
-					Err( error ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "file {} deleted but database entry still exists. details: {}", file_id, error ) ) ) }
-				};
-			},
-			Ok(()) => {
-				match sqlx::query( "DELETE FROM filetable WHERE ID = ?" ).bind( file_id.to_string() ).execute( &state.database ).await {
-					Ok(..) => {
-						println!( "File {} removed and database updated", file_id );
-						match remove_dir( format!( "./uploads/temp/{}", file_id ) ).await {
-							Ok(()) => { return Ok( format!( "File {} deleted", file_id  ) ); }
-							Err( error_msg ) => {
-								return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "File {} directory deletion failed. Details: {}", file_id, error_msg ) ) );
-							}
-						}
-					}
-					Err( error ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "file {} deleted but database entry still exists. details: {}", file_id, error ) ) ) }
-				};
-			}
-		};
-	} else {
-		return Err( ( StatusCode::NOT_FOUND, format!( "File record exists in database but the file is missing on disk." ) ) );
+	if !file_exists {
+		return Err( ( StatusCode::NOT_FOUND, "File record exists in database but the file is missing on disk.".to_string() ) );
+	}
+
+	if let Err( error ) = remove_file( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await {
+		return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to remove file {}, error: {}", file_id, error ) ) );
+	}
+
+	if let Err( error ) = sqlx::query( "DELETE FROM filetable WHERE ID = ?" ).bind( &file_id ).execute( &state.database ).await {
+		return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "file {} deleted but database entry still exists. details: {}", file_id, error ) ) );
+	}
+
+	info!( file_id, file_name, "file deleted" );
+
+	match remove_dir( format!( "./uploads/temp/{}", file_id ) ).await {
+		Ok(()) => Ok( format!( "File {} deleted", file_name ) ),
+		Err( error_msg ) => Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "File {} directory deletion failed. Details: {}", file_id, error_msg ) ) ),
 	}
 }
 
