@@ -27,7 +27,9 @@ use axum::{
 		StatusCode,
 		header,
 	},
-	middleware::Next,
+	middleware::{
+		Next
+	},
 	response::{
 		Html,
 		Json,Response
@@ -397,6 +399,52 @@ async fn file_status( state: State<AppState>, Path( id ): Path<String> ) -> Resu
 	} ) ) )
 }
 
+async fn delete_file( state: State<AppState>, Path( id ): Path<String> ) -> Result<String, ( StatusCode, String )> {
+	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
+
+	let file_id: String = res.get( "ID" );
+	let file_name: String = res.get( "FileName" );
+
+	let file_exists: bool = match try_exists( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await {
+		Err( error_msg ) => { return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_msg ) ) ); }
+		Ok( file ) => file
+	};
+
+	if file_exists {
+		match remove_file( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await {
+			Err( error ) => {
+				println!( "Error in cleanup with file id {} | more info: {}", file_id, error );
+				match sqlx::query( "DELETE FROM filetable WHERE ID = ?" ).bind( file_id.to_string() ).execute( &state.database ).await {
+					Ok(..) => {
+						println!( "File {} removed and database updated", file_id );
+						match remove_dir( format!( "./uploads/temp/{}", file_id ) ).await {
+							Ok(()) => { return Ok( format!("File {} directory deleted", file_id )); }
+							Err( error_msg ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "File {} directory deletion failed. Details: {}", file_id, error_msg ) ) ); }
+						}
+					}
+					Err( error ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "file {} deleted but database entry still exists. details: {}", file_id, error ) ) ) }
+				};
+			},
+			Ok(()) => {
+				match sqlx::query( "DELETE FROM filetable WHERE ID = ?" ).bind( file_id.to_string() ).execute( &state.database ).await {
+					Ok(..) => {
+						println!( "File {} removed and database updated", file_id );
+						match remove_dir( format!( "./uploads/temp/{}", file_id ) ).await {
+							Ok(()) => { return Ok( format!( "File {} deleted", file_id  ) ); }
+							Err( error_msg ) => {
+								return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "File {} directory deletion failed. Details: {}", file_id, error_msg ) ) );
+							}
+						}
+					}
+					Err( error ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "file {} deleted but database entry still exists. details: {}", file_id, error ) ) ) }
+				};
+			}
+		};
+	} else {
+		return Err( ( StatusCode::NOT_FOUND, format!( "File record exists in database but the file is missing on disk." ) ) );
+	}
+}
+
 async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
 	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
 
@@ -609,6 +657,7 @@ pub fn build_router( state: AppState ) -> Router {
 	Router::new()
 		.route( "/ping", get( pong ) )
 		.route( "/status/{file_id}", get( file_status ) )
+		.route( "/delete/{file_id}", get( delete_file ) )
 		.route( "/download/{file_id}", get( download_file ) )
 		.route( "/curlup", post( curl_upload_processor ) )
 		.route( "/html_uploader_form", get( html_uploader_form ) )
