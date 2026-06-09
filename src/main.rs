@@ -10,24 +10,10 @@ use std::{
 	},
 };
 
-use axum::{
-	middleware::{
-		from_fn
-	}
-};
-
-use axum_governor::{
-	GovernorLayer
-};
-
 use lazy_limit::{
 	init_rate_limiter,
 	Duration as RateDuration,
 	RuleConfig,
-};
-
-use real::{
-	RealIpLayer
 };
 
 use sqlx::{
@@ -55,7 +41,6 @@ use tracing_subscriber::{
 
 use capsule_server::{
 	AppState,
-	add_retry_after,
 	build_router,
 	spawn_cleanup_task
 };
@@ -94,10 +79,7 @@ async fn main() {
 
 	spawn_cleanup_task( state.database.clone() );
 
-	let app = build_router( state )
-		.layer( GovernorLayer::default() )
-		.layer( from_fn( add_retry_after ) )
-		.layer( RealIpLayer::default() );
+	let app = build_router( state );
 
 	let listener = TcpListener::bind( "0.0.0.0:9001" ).await.unwrap();
 	axum::serve( listener, app.into_make_service_with_connect_info::<SocketAddr>() ).await.unwrap();

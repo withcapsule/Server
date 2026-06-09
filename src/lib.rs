@@ -28,6 +28,7 @@ use axum::{
 		header,
 	},
 	middleware::{
+		from_fn,
 		Next
 	},
 	response::{
@@ -72,6 +73,10 @@ use serde_json::{
 	json,
 	Value
 };
+
+use axum_governor::GovernorLayer;
+
+use real::RealIpLayer;
 
 use tower_http::{
 	cors::{
@@ -657,6 +662,9 @@ pub fn build_router( state: AppState ) -> Router {
 				.make_span_with( DefaultMakeSpan::new().level( tracing::Level::INFO ) )
 				.on_response( DefaultOnResponse::new().level( tracing::Level::INFO ) )
 		)
+		.layer( GovernorLayer::default() )
+		.layer( from_fn( add_retry_after ) )
+		.layer( RealIpLayer::default() )
 		.layer(
 			CorsLayer::new()
 				.allow_origin(
