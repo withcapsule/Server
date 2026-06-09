@@ -659,31 +659,15 @@ pub fn build_router( state: AppState ) -> Router {
 		)
 		.layer(
 			CorsLayer::new()
-				.allow_origin( "http://localhost:3000".parse::<HeaderValue>().unwrap() )
-				.allow_origin( "https://seanathan10.github.io".parse::<HeaderValue>().unwrap() )
+				.allow_origin(
+					[
+						"http://localhost:3000".parse::<HeaderValue>().unwrap(),
+						"https://seanathan10.github.io".parse::<HeaderValue>().unwrap(),
+						"https://send.withcapsule.dev".parse::<HeaderValue>().unwrap(),
+						"https://withcapsule.dev".parse::<HeaderValue>().unwrap(),
+					]
+				)
 				.allow_methods( [ Method::GET, Method::POST ] )
 				.expose_headers( [ header::CONTENT_DISPOSITION, axum::http::HeaderName::from_static( "x-encrypted" ) ] )
 		)
-		.layer(
-			CorsLayer::new()
-				.allow_origin( "https://send.withcapsule.dev".parse::<HeaderValue>().unwrap() )
-				.allow_methods( [ Method::GET, Method::POST ] )
-				.expose_headers( [ header::CONTENT_DISPOSITION, axum::http::HeaderName::from_static( "x-encrypted" ) ] )
-		)
-		.layer(
-			CorsLayer::new()
-				.allow_origin( "https://withcapsule.dev".parse::<HeaderValue>().unwrap() )
-				.allow_methods( [ Method::GET, Method::POST ] )
-				.expose_headers( [ header::CONTENT_DISPOSITION, axum::http::HeaderName::from_static( "x-encrypted" ) ] )
-		)
-		.layer(
-			CorsLayer::new()
-				.allow_origin( "https://withcapsule.dev/".parse::<HeaderValue>().unwrap() )
-				.allow_methods( [ Method::GET, Method::POST ] )
-				.expose_headers( [ header::CONTENT_DISPOSITION, axum::http::HeaderName::from_static( "x-encrypted" ) ] )
-		)
-
-
 }
-
-
