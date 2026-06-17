@@ -33,6 +33,12 @@ use capsule_server::{
     build_router
 };
 
+use lazy_limit::{
+    init_rate_limiter,
+    Duration as RateDuration,
+    RuleConfig,
+};
+
 use sqlx::{
     SqlitePool,
     sqlite::{
@@ -55,11 +61,17 @@ use tokio::{
     },
     net::{
         TcpListener
+    },
+    sync::{
+        Mutex as AsyncMutex,
+        OnceCell
     }
 };
 
 static TRACING:    std::sync::Once = std::sync::Once::new();
 static TEST_DB_ID: AtomicU32       = AtomicU32::new( 0 );
+static LIMITER_INIT: OnceCell<()>  = OnceCell::const_new();
+static TEST_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
 
 fn init_tracing() {
     TRACING.call_once(|| {
@@ -93,6 +105,23 @@ fn audit_log() -> &'static Mutex<std::fs::File> {
 
 fn write_audit( text: &str ) {
     audit_log().lock().unwrap().write_all( text.as_bytes() ).unwrap();
+}
+
+fn test_lock() -> &'static AsyncMutex<()> {
+    TEST_LOCK.get_or_init( || AsyncMutex::new(()) )
+}
+
+async fn ensure_rate_limiter_initialized() {
+    LIMITER_INIT.get_or_init( || async {
+        init_rate_limiter!(
+            default: RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ),
+            routes: [
+                ( "/curlup", RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ) ),
+                ( "/html_upload_processor", RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ) ),
+                ( "/html_download_processor", RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ) )
+            ]
+        ).await;
+    } ).await;
 }
 
 struct Stats {
@@ -261,6 +290,8 @@ RESULT    : {}\n\
 }
 
 async fn start_test_server() -> String {
+    ensure_rate_limiter_initialized().await;
+
     let db_id = TEST_DB_ID.fetch_add( 1, Ordering::Relaxed );
 
     let opts = SqliteConnectOptions::from_str(
@@ -271,7 +302,7 @@ async fn start_test_server() -> String {
 
     let pool = SqlitePool::connect_with( opts ).await.unwrap();
 
-    sqlx::query( "CREATE TABLE IF NOT EXISTS filetable (ID VARCHAR(16) PRIMARY KEY, FileName VARCHAR(64) NOT NULL, UploadTime INTEGER NOT NULL, FileSize INTEGER NOT NULL )" )
+    sqlx::query( "CREATE TABLE IF NOT EXISTS filetable (ID VARCHAR(16) PRIMARY KEY, FileName VARCHAR(64) NOT NULL, UploadTime INTEGER NOT NULL, FileSize INTEGER NOT NULL, IsEncrypted INTEGER NOT NULL DEFAULT 0)" )
         .execute( &pool ).await.unwrap();
 
     create_dir_all( "./uploads/temp" ).await.unwrap();
@@ -334,6 +365,7 @@ async fn cleanup_file_ids( ids: &[String] ) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_load_large_file_uploads() {
+    let _guard = test_lock().lock().await;
     init_tracing();
     const COUNT:     usize    = 50;
     const FILE_SIZE: usize    = 2 * 1024 * 1024;
@@ -407,6 +439,7 @@ async fn test_load_large_file_uploads() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_load_concurrent_downloads() {
+    let _guard = test_lock().lock().await;
     init_tracing();
     const SEED_COUNT:     usize    = 8;
     const SEED_SIZE:      usize    = 2 * 1024 * 1024;
@@ -478,6 +511,7 @@ async fn test_load_concurrent_downloads() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_load_mixed_upload_download() {
+    let _guard = test_lock().lock().await;
     init_tracing();
     const SEED_COUNT:  usize    = 10;
     const SEED_SIZE:   usize    = 1 * 1024 * 1024;
@@ -576,6 +610,7 @@ async fn test_load_mixed_upload_download() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_load_sustained_throughput() {
+    let _guard = test_lock().lock().await;
     init_tracing();
     const WAVES:            usize    = 4;
     const UPLOADS_PER_WAVE: usize    = 50;

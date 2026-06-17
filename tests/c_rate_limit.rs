@@ -1,13 +1,19 @@
 // Requires the server to be running on localhost:9001
-// Run in isolation — rate limiter state is per-IP and shared with the live server
+// rate limiter state is per-IP and shared with the live server
 
 use std::{
+	sync::{
+		OnceLock
+	},
 	time::{
 		Duration
 	}
 };
 
 use tokio::{
+	sync::{
+		Mutex
+	},
 	time::{
 		sleep
 	}
@@ -22,9 +28,15 @@ use reqwest::{
 };
 
 const BASE_URL: &str = "http://localhost:9001";
+static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn test_lock() -> &'static Mutex<()> {
+	TEST_LOCK.get_or_init( || Mutex::new(()) )
+}
 
 #[tokio::test]
 async fn test_upload_route_rate_limited() {
+	let _guard = test_lock().lock().await;
 	println!( "-- Upload route per-IP rate limit test (limit: 2 req/s, sending 10) --" );
 	let client = Client::new();
 
@@ -57,6 +69,7 @@ async fn test_upload_route_rate_limited() {
 
 #[tokio::test]
 async fn test_per_ip_default_rate_limit() {
+	let _guard = test_lock().lock().await;
 	println!( "-- Per-IP default rate limit test (limit: 20 req/s, sending 30) --" );
 	let client = Client::new();
 
@@ -83,6 +96,7 @@ async fn test_per_ip_default_rate_limit() {
 
 #[tokio::test]
 async fn test_download_processor_rate_limited() {
+	let _guard = test_lock().lock().await;
 	sleep( Duration::from_secs( 1 ) ).await;
 	println!( "-- Download processor per-IP rate limit test (limit: 2 req/s, sending 10) --" );
 	let client = Client::new();
@@ -114,6 +128,7 @@ async fn test_download_processor_rate_limited() {
 
 #[tokio::test]
 async fn test_retry_after_header_on_429() {
+	let _guard = test_lock().lock().await;
 	sleep( Duration::from_secs( 1 ) ).await;
 	println!( "-- Retry-After header present on 429 responses --" );
 	let client = Client::new();

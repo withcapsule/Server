@@ -36,6 +36,7 @@ use axum::{
 		Json,Response
 	},
 	routing::{
+		delete,
 		get,
 		post
 	},
@@ -74,9 +75,13 @@ use serde_json::{
 	Value
 };
 
-use axum_governor::GovernorLayer;
+use axum_governor::{
+	GovernorLayer
+};
 
-use real::RealIpLayer;
+use real::{
+	RealIpLayer
+};
 
 use tower_http::{
 	cors::{
@@ -647,7 +652,7 @@ pub fn build_router( state: AppState ) -> Router {
 	Router::new()
 		.route( "/ping", get( pong ) )
 		.route( "/status/{file_id}", get( file_status ) )
-		.route( "/delete/{file_id}", get( delete_file ) )
+		.route( "/delete/{file_id}", delete( delete_file ) )
 		.route( "/download/{file_id}", get( download_file ) )
 		.route( "/curlup", post( curl_upload_processor ) )
 		.route( "/html_uploader_form", get( html_uploader_form ) )
@@ -675,7 +680,7 @@ pub fn build_router( state: AppState ) -> Router {
 						"https://withcapsule.dev".parse::<HeaderValue>().unwrap(),
 					]
 				)
-				.allow_methods( [ Method::GET, Method::POST ] )
+				.allow_methods( [ Method::GET, Method::POST, Method::DELETE ] )
 				.expose_headers( [ header::CONTENT_DISPOSITION, axum::http::HeaderName::from_static( "x-encrypted" ) ] )
 		)
 }
