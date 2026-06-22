@@ -69,12 +69,7 @@ async fn main() {
 	create_dir_all( "./uploads/temp" ).await.unwrap();
 
 	init_rate_limiter!(
-		default: RuleConfig::new( RateDuration::seconds( 1 ), 20 ),
-		routes: [
-			( "/curlup", RuleConfig::new( RateDuration::seconds( 1 ), 2 ) ),
-			( "/html_upload_processor", RuleConfig::new( RateDuration::seconds( 1 ), 1 ) ),
-			( "/html_download_processor", RuleConfig::new( RateDuration::seconds( 1 ), 1 ) )
-		]
+		default: RuleConfig::new( RateDuration::seconds( 1 ), 1 )
 	).await;
 
 	spawn_cleanup_task( state.database.clone() );
