@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 axum = { version = "0.8.9", features = [ "multipart" ] }
+dashmap = "6"
 axum-governor = "1.0.3"
 lazy-limit = "1"
 real = { version = "0.1", features = [ "axum" ] }

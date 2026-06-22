@@ -1,6 +1,14 @@
 use std::{
+	net::{
+		IpAddr,
+		SocketAddr,
+	},
+	sync::{
+		Arc
+	},
 	time::{
 		Duration,
+		Instant,
 		SystemTime
 	}
 };
@@ -11,6 +19,7 @@ use axum::{
 		Body
 	},
 	extract::{
+		ConnectInfo,
 		DefaultBodyLimit,
 		Multipart,
 		Path,
@@ -22,6 +31,7 @@ use axum::{
 		},
 	},
 	http::{
+		HeaderMap,
 		HeaderValue,
 		Method,
 		StatusCode,
@@ -42,6 +52,10 @@ use axum::{
 	},
 };
 
+use dashmap::{
+	DashMap
+};
+
 use rand::{
 	RngExt,
 	distr::{
@@ -50,7 +64,9 @@ use rand::{
 };
 
 use tokio::{
-	io::AsyncWriteExt,
+	io::{
+		AsyncWriteExt
+	},
 	fs::{
 		File,
 		ReadDir,
@@ -106,9 +122,50 @@ use sqlx::{
 	},
 };
 
+const BANDWIDTH_WINDOW_IN_SECONDS: u64 = 3600;
+const BANDWIDTH_LIMIT_IN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+struct BandwidthEntry {
+	bytes_used:   u64,
+	window_start: Instant,
+}
+
+#[derive(Clone)]
+pub struct BandwidthTracker( Arc<DashMap<IpAddr, BandwidthEntry>> );
+
+impl BandwidthTracker {
+	pub fn new() -> Self {
+		Self( Arc::new( DashMap::new() ) )
+	}
+
+	pub fn would_exceed( &self, ip: IpAddr, bytes: u64 ) -> bool {
+		if let Some( entry ) = self.0.get( &ip ) {
+			if entry.window_start.elapsed().as_secs() < BANDWIDTH_WINDOW_IN_SECONDS {
+				return entry.bytes_used.saturating_add( bytes ) > BANDWIDTH_LIMIT_IN_BYTES;
+			}
+		}
+		false
+	}
+
+	pub fn record( &self, ip: IpAddr, bytes: u64 ) {
+		let mut entry = self.0.entry( ip ).or_insert_with( || BandwidthEntry {
+			bytes_used:   0,
+			window_start: Instant::now(),
+		} );
+
+		if entry.window_start.elapsed().as_secs() >= BANDWIDTH_WINDOW_IN_SECONDS {
+			entry.bytes_used   = bytes;
+			entry.window_start = Instant::now();
+		} else {
+			entry.bytes_used = entry.bytes_used.saturating_add( bytes );
+		}
+	}
+}
+
 #[derive(Clone)]
 pub struct AppState {
-	pub database: SqlitePool,
+	pub database:  SqlitePool,
+	pub bandwidth: BandwidthTracker,
 }
 
 #[derive(serde::Deserialize)]
@@ -288,7 +345,7 @@ async fn html_downloader_form() -> Html<&'static str> {
 	)
 }
 
-async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'_>, is_encrypted: bool ) -> Result<String, ( StatusCode, String )> {
+async fn upload_file( State( state ): State<AppState>, ip: IpAddr, mut parsed_field: Field<'_>, is_encrypted: bool ) -> Result<String, ( StatusCode, String )> {
 	let file_id: String = rand::rng().sample_iter( Alphanumeric ).take( 8 ).map( char::from ).collect();
 	let file_name = parsed_field.file_name().unwrap_or( "__failure_upload_file()__" ).to_string();
 
@@ -347,6 +404,8 @@ async fn upload_file( State( state ): State<AppState>, mut parsed_field: Field<'
 			remove_dir( format!( "./uploads/temp/{}", file_id ) ).await.ok();
 			return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to add to db, error: {}", error_message ) ) );
 		}
+
+	state.bandwidth.record( ip, total_bytes_written as u64 );
 
 	return Ok( format!( "Success, uploaded {} of {} bytes. File ID for downloading is {}.\n", file_name, total_bytes_written, file_id ) )
 }
@@ -440,13 +499,19 @@ async fn delete_file( state: State<AppState>, Path( id ): Path<String> ) -> Resu
 	}
 }
 
-async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
+async fn download_file( State( state ): State<AppState>, ConnectInfo( addr ): ConnectInfo<SocketAddr>, Path( id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
 	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
 
-	let file_id: String = res.get( "ID" );
-	let file_name: String = res.get( "FileName" );
-	let file_size: i64 = res.get( "FileSize" );
+	let file_id: String    = res.get( "ID" );
+	let file_name: String  = res.get( "FileName" );
+	let file_size: i64     = res.get( "FileSize" );
 	let is_encrypted: bool = res.get( "IsEncrypted" );
+
+	let ip = addr.ip();
+
+	if state.bandwidth.would_exceed( ip, file_size as u64 ) {
+		return Err( ( StatusCode::TOO_MANY_REQUESTS, "Bandwidth limit exceeded. Try again later.".to_string() ) );
+	}
 
 	info!( file_id, file_name, file_size, is_encrypted, "download started" );
 
@@ -454,6 +519,8 @@ async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Re
 		Err( error_msg ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "unable to open file, details: {}", error_msg ) ) ) }
 		Ok( file ) => file
 	};
+
+	state.bandwidth.record( ip, file_size as u64 );
 
 	let file_stream = ReaderStream::new( file_to_send );
 	let file_body = Body::from_stream( file_stream );
@@ -470,8 +537,18 @@ async fn download_file( state: State<AppState>, Path( id ): Path<String> ) -> Re
 	return Ok( response_object );
 }
 
-async fn curl_upload_processor( state: State<AppState>, Query( query ): Query<UploadQuery>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+async fn curl_upload_processor( State( state ): State<AppState>, ConnectInfo( addr ): ConnectInfo<SocketAddr>, Query( query ): Query<UploadQuery>, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+	let ip = addr.ip();
 	let is_encrypted = query.encrypted.unwrap_or( false );
+
+	if let Some( bytes ) = headers.get( header::CONTENT_LENGTH )
+		.and_then( |v| v.to_str().ok() )
+		.and_then( |s| s.parse::<u64>().ok() )
+	{
+		if state.bandwidth.would_exceed( ip, bytes ) {
+			return Err( ( StatusCode::TOO_MANY_REQUESTS, "Bandwidth limit exceeded. Try again later.\n".to_string() ) );
+		}
+	}
 
 	loop {
 		let parts_of_curl = part.next_field().await;
@@ -489,7 +566,7 @@ async fn curl_upload_processor( state: State<AppState>, Query( query ): Query<Up
 		let field_name = field.name().unwrap_or( "unknown" ).to_string();
 
 		if field_name == "f" {
-			match upload_file( state, field, is_encrypted ).await {
+			match upload_file( State( state.clone() ), ip, field, is_encrypted ).await {
 				Err( error_message ) => { return Err( error_message ); }
 				Ok( message_from_uploader ) => { return Ok( message_from_uploader ); }
 			}
@@ -499,7 +576,18 @@ async fn curl_upload_processor( state: State<AppState>, Query( query ): Query<Up
 	return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
 }
 
-async fn html_upload_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+async fn html_upload_processor( State( state ): State<AppState>, ConnectInfo( addr ): ConnectInfo<SocketAddr>, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+	let ip = addr.ip();
+
+	if let Some( bytes ) = headers.get( header::CONTENT_LENGTH )
+		.and_then( |v| v.to_str().ok() )
+		.and_then( |s| s.parse::<u64>().ok() )
+	{
+		if state.bandwidth.would_exceed( ip, bytes ) {
+			return Err( ( StatusCode::TOO_MANY_REQUESTS, "Bandwidth limit exceeded. Try again later.".to_string() ) );
+		}
+	}
+
 	loop {
 		let parts_of_html_form = part.next_field().await;
 
@@ -516,7 +604,7 @@ async fn html_upload_processor( state: State<AppState>, mut part: Multipart ) ->
 		let current_field_name = current_field.name().unwrap_or( "unknown" ).to_string();
 
 		if current_field_name == "file_upload_field" {
-			match upload_file( state, current_field, false ).await {
+			match upload_file( State( state.clone() ), ip, current_field, false ).await {
 				Ok( message_from_uploader ) => { return Ok( message_from_uploader ); }
 				Err( error_msg ) => { return Err( error_msg ); }
 			}

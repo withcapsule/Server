@@ -41,6 +41,7 @@ use tracing_subscriber::{
 
 use capsule_server::{
 	AppState,
+	BandwidthTracker,
 	build_router,
 	spawn_cleanup_task
 };
@@ -58,10 +59,13 @@ async fn main() {
 		.read_only( false );
 
 	let sqlite_db = SqlitePool::connect_with( options ).await;
-	let state = AppState { database: match sqlite_db {
-		Err( error_message ) => { println!( "Failed to create database. Error: {}", error_message ); exit( 1 ); }
-		Ok( db ) => db
-	} };
+	let state = AppState {
+		database: match sqlite_db {
+			Err( error_message ) => { println!( "Failed to create database. Error: {}", error_message ); exit( 1 ); }
+			Ok( db ) => db
+		},
+		bandwidth: BandwidthTracker::new(),
+	};
 
 	sqlx::query( "CREATE TABLE IF NOT EXISTS filetable (ID VARCHAR(16) PRIMARY KEY, FileName VARCHAR(64) NOT NULL, UploadTime INTEGER NOT NULL, FileSize INTEGER NOT NULL, IsEncrypted INTEGER NOT NULL DEFAULT 0)" )
 		.execute( &state.database ).await.expect( "Failed to create table; as table didn't exist." );
