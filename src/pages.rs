@@ -1,25 +1,40 @@
+use std::{
+	net::{
+		SocketAddr
+	}
+};
+
 use axum::{
-	http::StatusCode,
+	extract::{
+		ConnectInfo,
+		Multipart,
+		State,
+	},
+	http::{
+		StatusCode,
+		header,
+		HeaderMap,
+	},
 	response::{
 		Html,
 		IntoResponse,
-		Json,
 		Redirect,
 		Response,
 	},
 };
 
-// Set to true to enable the built-in HTML upload/download pages (highly useful for running the server locally)
-const LOCAL_HTML: bool = false;
-
-use serde_json::{
-	json,
-	Value,
+use crate::{
+	handlers::{
+		upload_file,
+		search_file,
+	},
+	state::{
+		AppState
+	},
 };
 
-pub async fn pong() -> Json<Value> {
-	return Json( json!( { "message": "pong" } ) )
-}
+// Set to true to enable the built-in HTML upload/download pages (highly useful for running the server locally)
+const LOCAL_HTML: bool = false;
 
 pub async fn main_menu() -> Response {
 	if !LOCAL_HTML {
@@ -196,4 +211,69 @@ pub async fn html_downloader_form() -> Response {
 		</html>
 	"#
 	).into_response()
+}
+
+pub async fn html_upload_processor( State( state ): State<AppState>, ConnectInfo( addr ): ConnectInfo<SocketAddr>, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+	let ip = addr.ip();
+
+	if let Some( bytes ) = headers.get( header::CONTENT_LENGTH )
+		.and_then( |v| v.to_str().ok() )
+		.and_then( |s| s.parse::<u64>().ok() )
+	{
+		if state.bandwidth.would_exceed( ip, bytes ) {
+			return Err( ( StatusCode::TOO_MANY_REQUESTS, "Bandwidth limit exceeded. Try again later.".to_string() ) );
+		}
+	}
+
+	loop {
+		let parts_of_html_form = part.next_field().await;
+
+		let current_part = match parts_of_html_form {
+			Err( error ) => { return Err( ( StatusCode::BAD_REQUEST, format!( "Multipart Error: {}", error ) ) ); }
+			Ok( found_next_form_part ) => found_next_form_part
+		};
+
+		let current_field = match current_part {
+			Some( found_a_field ) => found_a_field,
+			None => break,
+		};
+
+		let current_field_name = current_field.name().unwrap_or( "unknown" ).to_string();
+
+		if current_field_name == "file_upload_field" {
+			match upload_file( State( state.clone() ), ip, current_field, false ).await {
+				Ok( message_from_uploader ) => { return Ok( message_from_uploader ); }
+				Err( error_msg ) => { return Err( error_msg ); }
+			}
+		}
+	}
+
+	return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
+}
+
+pub async fn html_download_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+	loop {
+		let html_parts = part.next_field().await;
+
+		let current_html_part = match html_parts {
+			Err( error_message ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "issue with download site, error: {}", error_message ) ) ); }
+			Ok( found ) => found
+		};
+
+		let current_field = match current_html_part {
+			Some( field ) => field,
+			None => break
+		};
+
+		let field_name = current_field.name().unwrap_or( "massive_issue_please_fix" ).to_string();
+
+		if field_name == "file_download_field" {
+			match search_file( state, current_field ).await {
+				Err( error_message ) => { return Err( error_message ) }
+				Ok( message_from_uploader ) => { return Ok( message_from_uploader ) }
+			}
+		}
+	}
+
+	return Err( ( StatusCode::BAD_REQUEST, format!( "No file ID field found in the download form." ) ) );
 }

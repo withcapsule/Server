@@ -86,7 +86,7 @@ pub(crate) struct UploadQuery {
 	encrypted: Option<bool>,
 }
 
-async fn upload_file( State( state ): State<AppState>, ip: IpAddr, mut parsed_field: Field<'_>, is_encrypted: bool ) -> Result<String, ( StatusCode, String )> {
+pub(crate) async fn upload_file( State( state ): State<AppState>, ip: IpAddr, mut parsed_field: Field<'_>, is_encrypted: bool ) -> Result<String, ( StatusCode, String )> {
 	let file_id: String = rand::rng().sample_iter( Alphanumeric ).take( 8 ).map( char::from ).collect();
 	let file_name = parsed_field.file_name().unwrap_or( "__failure_upload_file()__" ).to_string();
 
@@ -162,7 +162,7 @@ pub async fn lookup_file_record( id: &str, db: &SqlitePool ) -> Result<SqliteRow
 		}
 }
 
-async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
+pub(crate) async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
 	let id = match parsed_field.text().await {
 		Err( error_msg ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Could not read the file ID you entered, error: {}", error_msg ) ) ); }
 		Ok( id ) => id
@@ -317,67 +317,3 @@ pub async fn curl_upload_processor( State( state ): State<AppState>, ConnectInfo
 	return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
 }
 
-pub async fn html_upload_processor( State( state ): State<AppState>, ConnectInfo( addr ): ConnectInfo<SocketAddr>, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
-	let ip = addr.ip();
-
-	if let Some( bytes ) = headers.get( header::CONTENT_LENGTH )
-		.and_then( |v| v.to_str().ok() )
-		.and_then( |s| s.parse::<u64>().ok() )
-	{
-		if state.bandwidth.would_exceed( ip, bytes ) {
-			return Err( ( StatusCode::TOO_MANY_REQUESTS, "Bandwidth limit exceeded. Try again later.".to_string() ) );
-		}
-	}
-
-	loop {
-		let parts_of_html_form = part.next_field().await;
-
-		let current_part = match parts_of_html_form {
-			Err( error ) => { return Err( ( StatusCode::BAD_REQUEST, format!( "Multipart Error: {}", error ) ) ); }
-			Ok( found_next_form_part ) => found_next_form_part
-		};
-
-		let current_field = match current_part {
-			Some( found_a_field ) => found_a_field,
-			None => break,
-		};
-
-		let current_field_name = current_field.name().unwrap_or( "unknown" ).to_string();
-
-		if current_field_name == "file_upload_field" {
-			match upload_file( State( state.clone() ), ip, current_field, false ).await {
-				Ok( message_from_uploader ) => { return Ok( message_from_uploader ); }
-				Err( error_msg ) => { return Err( error_msg ); }
-			}
-		}
-	}
-
-	return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
-}
-
-pub async fn html_download_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
-	loop {
-		let html_parts = part.next_field().await;
-
-		let current_html_part = match html_parts {
-			Err( error_message ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "issue with download site, error: {}", error_message ) ) ); }
-			Ok( found ) => found
-		};
-
-		let current_field = match current_html_part {
-			Some( field ) => field,
-			None => break
-		};
-
-		let field_name = current_field.name().unwrap_or( "massive_issue_please_fix" ).to_string();
-
-		if field_name == "file_download_field" {
-			match search_file( state, current_field ).await {
-				Err( error_message ) => { return Err( error_message ) }
-				Ok( message_from_uploader ) => { return Ok( message_from_uploader ) }
-			}
-		}
-	}
-
-	return Err( ( StatusCode::BAD_REQUEST, format!( "No file ID field found in the download form." ) ) );
-}

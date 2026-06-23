@@ -49,12 +49,15 @@ use crate::{
 	}
 };
 
+use crate::pong;
+
 use crate::{
 	pages::{
-		pong,
 		main_menu,
 		html_uploader_form,
 		html_downloader_form,
+		html_upload_processor,
+		html_download_processor,
 	}
 };
 
@@ -64,8 +67,6 @@ use crate::{
 		delete_file,
 		download_file,
 		curl_upload_processor,
-		html_upload_processor,
-		html_download_processor,
 	}
 };
 
