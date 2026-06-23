@@ -12,7 +12,7 @@ The Capsule server is the backend for the project. It accepts uploads, serves do
 
 Main API routes:
 
-- `POST /curlup`
+- `POST /upload`
 - `GET /download/:file_id`
 - `GET /status/:file_id`
 - `DELETE /delete/:file_id`

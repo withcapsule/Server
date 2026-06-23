@@ -50,7 +50,7 @@ async fn test_upload_route_rate_limited() {
 		);
 
 		let res = client
-			.post( format!( "{}/curlup", BASE_URL ) )
+			.post( format!( "{}/upload", BASE_URL ) )
 			.multipart( form )
 			.send()
 			.await

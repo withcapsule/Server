@@ -84,7 +84,7 @@ pub fn build_router( state: AppState ) -> Router {
 		.route( "/status/{file_id}", get( file_status ) )
 		.route( "/delete/{file_id}", delete( delete_file ) )
 		.route( "/download/{file_id}", get( download_file ) )
-		.route( "/curlup", post( curl_upload_processor ) )
+		.route( "/upload", post( curl_upload_processor ) )
 		.route( "/html_uploader_form", get( html_uploader_form ) )
 		.route( "/html_upload_processor", post( html_upload_processor ) )
 		.route( "/html_downloader_form", get( html_downloader_form ) )

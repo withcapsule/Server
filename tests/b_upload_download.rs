@@ -56,7 +56,7 @@ async fn test_upload_and_download_integrity() {
 
 	println!( "  uploading rusttest.bin..." );
 	let upload_res = client
-		.post( format!( "{}/curlup", BASE_URL ) )
+		.post( format!( "{}/upload", BASE_URL ) )
 		.multipart( form )
 		.send()
 		.await
@@ -107,7 +107,7 @@ async fn test_content_disposition_filename() {
 
 	println!( "  uploading myfile.txt..." );
 	let upload_res = client
-		.post( format!( "{}/curlup", BASE_URL ) )
+		.post( format!( "{}/upload", BASE_URL ) )
 		.multipart( form )
 		.send()
 		.await
@@ -155,7 +155,7 @@ async fn test_delete_uploaded_file() {
 
 	println!( "  uploading delete_me.txt..." );
 	let upload_res = client
-		.post( format!( "{}/curlup", BASE_URL ) )
+		.post( format!( "{}/upload", BASE_URL ) )
 		.multipart( form )
 		.send()
 		.await

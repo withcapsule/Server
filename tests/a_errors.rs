@@ -20,13 +20,13 @@ async fn test_download_nonexistent_id_returns_404() {
 
 #[tokio::test]
 async fn test_upload_no_file_returns_400() {
-	println!( "-- POST /curlup with empty form (expect 400) --" );
+	println!( "-- POST /upload with empty form (expect 400) --" );
 	let client = reqwest::Client::new();
 
 	let form = reqwest::multipart::Form::new();
 
 	let res = client
-		.post( format!( "{}/curlup", BASE_URL ) )
+		.post( format!( "{}/upload", BASE_URL ) )
 		.multipart( form )
 		.send()
 		.await

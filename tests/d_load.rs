@@ -116,7 +116,7 @@ async fn ensure_rate_limiter_initialized() {
         init_rate_limiter!(
             default: RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ),
             routes: [
-                ( "/curlup", RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ) ),
+                ( "/upload", RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ) ),
                 ( "/html_upload_processor", RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ) ),
                 ( "/html_download_processor", RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ) )
             ]
@@ -341,7 +341,7 @@ async fn seed_files( base_url: &str, client: &Client, count: usize, file_size: u
             Part::bytes( vec![ 0xABu8; file_size ] ).file_name( "seed.bin" ),
         );
         let body = client
-            .post( format!( "{}/curlup", base_url ) )
+            .post( format!( "{}/upload", base_url ) )
             .multipart( form )
             .send()
             .await
@@ -387,7 +387,7 @@ async fn test_load_large_file_uploads() {
         let client      = Arc::clone( &client );
         let stats       = Arc::clone( &stats );
         let ids         = Arc::clone( &uploaded_ids );
-        let url         = format!( "{}/curlup", base_url );
+        let url         = format!( "{}/upload", base_url );
 
         handles.push( spawn( async move {
             let t    = Instant::now();
@@ -553,7 +553,7 @@ async fn test_load_mixed_upload_download() {
                     "f",
                     Part::bytes( vec![ 0xCDu8; UPLOAD_SIZE ] ).file_name( "mixed.bin" ),
                 );
-                match client.post( format!( "{}/curlup", base ) ).multipart( form ).send().await {
+                match client.post( format!( "{}/upload", base ) ).multipart( form ).send().await {
                     Ok( r ) => {
                         let status = r.status().as_u16();
                         if let Ok( body ) = r.text().await {
@@ -637,7 +637,7 @@ async fn test_load_sustained_throughput() {
             let client    = Arc::clone( &client );
             let stats     = Arc::clone( &total_stats );
             let ids       = Arc::clone( &wave_ids );
-            let url       = format!( "{}/curlup", base_url );
+            let url       = format!( "{}/upload", base_url );
 
             upload_handles.push( spawn( async move {
                 let t    = Instant::now();
