@@ -20,6 +20,7 @@ use sqlx::{
 
 pub const BANDWIDTH_WINDOW_IN_SECONDS: u64 = 3600;
 pub const BANDWIDTH_LIMIT_IN_BYTES:    u64 = 2 * 1024 * 1024 * 1024;
+pub const MINIMUM_FREE_SPACE:          u64 = 512 * 1024 * 1024;
 
 struct BandwidthEntry {
 	bytes_used:   u64,

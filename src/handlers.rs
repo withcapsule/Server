@@ -75,9 +75,14 @@ use sqlx::{
 	},
 };
 
+use fs2::{
+	available_space
+};
+
 use crate::{
 	state::{
-		AppState
+		AppState,
+		MINIMUM_FREE_SPACE,
 	}
 };
 
@@ -92,6 +97,10 @@ pub(crate) async fn upload_file( State( state ): State<AppState>, ip: IpAddr, mu
 
 	if file_name == "" || file_name == "__failure_upload_file()__" {
 		return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
+	}
+
+	if available_space( "./uploads" ).unwrap_or( u64::MAX ) < MINIMUM_FREE_SPACE {
+		return Err( ( StatusCode::SERVICE_UNAVAILABLE, "Server storage is full. Try again later.\n".to_string() ) );
 	}
 
 	info!( file_name, file_id, "upload started" );
@@ -316,4 +325,3 @@ pub async fn curl_upload_processor( State( state ): State<AppState>, ConnectInfo
 
 	return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
 }
-
