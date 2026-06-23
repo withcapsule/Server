@@ -45,25 +45,10 @@ use tracing_subscriber::{
 	EnvFilter
 };
 
-use axum::{
-	response::{
-		Json
-	}
-};
-
-use serde_json::{
-	json,
-	Value,
-};
-
 use state::{
 	AppState,
 	BandwidthTracker
 };
-
-pub async fn pong() -> Json<Value> {
-	return Json( json!( { "message": "pong" } ) )
-}
 
 use router::{
 	build_router

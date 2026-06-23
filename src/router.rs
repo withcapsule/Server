@@ -15,6 +15,7 @@ use axum::{
 		Next
 	},
 	response::{
+		Json,
 		Response
 	},
 	routing::{
@@ -49,7 +50,10 @@ use crate::{
 	}
 };
 
-use crate::pong;
+use serde_json::{
+	json,
+	Value,
+};
 
 use crate::{
 	pages::{
@@ -70,6 +74,8 @@ use crate::{
 	}
 };
 
+const ANDROID_APP_LINKS_SHA256: &str = "40:28:8B:97:8A:02:82:BC:85:CC:EA:A6:4F:36:E2:FA:09:B3:62:F7:FA:38:F3:60:54:A8:69:9E:BC:2C:B3:D5";
+
 pub async fn add_retry_after( request: Request, next: Next ) -> Response {
 	let response = next.run( request ).await;
 	if response.status() == StatusCode::TOO_MANY_REQUESTS {
@@ -79,9 +85,26 @@ pub async fn add_retry_after( request: Request, next: Next ) -> Response {
 	} else { response }
 }
 
+pub async fn pong() -> Json<Value> {
+	return Json( json!( { "message": "pong" } ) )
+}
+
+pub async fn assetlinks_json() -> axum::response::Response {
+	let body = format!(
+		r#"[{{"relation":["delegate_permission/common.handle_all_urls"],"target":{{"namespace":"android_app","package_name":"dev.withcapsule.android","sha256_cert_fingerprints":["{}"]}}}}]"#,
+		ANDROID_APP_LINKS_SHA256
+	);
+	axum::response::Response::builder()
+		.status( 200 )
+		.header( "Content-Type", "application/json" )
+		.body( axum::body::Body::from( body ) )
+		.unwrap()
+}
+
 pub fn build_router( state: AppState ) -> Router {
 	Router::new()
 		.route( "/ping", get( pong ) )
+		.route( "/.well-known/assetlinks.json", get( assetlinks_json ) )
 		.route( "/status/{file_id}", get( file_status ) )
 		.route( "/delete/{file_id}", delete( delete_file ) )
 		.route( "/download/{file_id}", get( download_file ) )
