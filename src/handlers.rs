@@ -3,6 +3,9 @@ use std::{
 		IpAddr,
 		SocketAddr,
 	},
+	sync::{
+		LazyLock
+	},
 	time::{
 		SystemTime
 	},
@@ -35,9 +38,6 @@ use axum::{
 
 use rand::{
 	RngExt,
-	distr::{
-		Alphanumeric
-	},
 };
 
 use tokio::{
@@ -91,8 +91,35 @@ pub(crate) struct UploadQuery {
 	encrypted: Option<bool>,
 }
 
+static WORDS: LazyLock<Vec<&'static str>> = LazyLock::new( || {
+	include_str!( "words.txt" )
+		.lines()
+		.map( str::trim )
+		.filter( |word| !word.is_empty() )
+		.collect()
+} );
+
+fn generate_file_id() -> String {
+	let mut rng = rand::rng();
+	( 0..3 )
+		.map( |_| WORDS[ rng.random_range( 0..WORDS.len() ) ].to_lowercase() )
+		.collect::<Vec<_>>()
+		.join( "-" )
+}
+
 pub(crate) async fn upload_file( State( state ): State<AppState>, ip: IpAddr, mut parsed_field: Field<'_>, is_encrypted: bool ) -> Result<String, ( StatusCode, String )> {
-	let file_id: String = rand::rng().sample_iter( Alphanumeric ).take( 8 ).map( char::from ).collect();
+	let mut file_id = generate_file_id();
+	for _ in 0..5 {
+		let exists = sqlx::query( "SELECT 1 FROM filetable WHERE ID = ?" )
+			.bind( &file_id )
+			.fetch_optional( &state.database )
+			.await
+			.map_err( |error_message| ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to check id uniqueness, error: {}", error_message ) ) )?;
+
+		if exists.is_none() { break; }
+		file_id = generate_file_id();
+	}
+
 	let file_name = parsed_field.file_name().unwrap_or( "__failure_upload_file()__" ).to_string();
 
 	if file_name == "" || file_name == "__failure_upload_file()__" {
@@ -174,7 +201,7 @@ pub async fn lookup_file_record( id: &str, db: &SqlitePool ) -> Result<SqliteRow
 pub(crate) async fn search_file( state: State<AppState>, parsed_field: Field<'_> ) -> Result<String, ( StatusCode, String )> {
 	let id = match parsed_field.text().await {
 		Err( error_msg ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Could not read the file ID you entered, error: {}", error_msg ) ) ); }
-		Ok( id ) => id
+		Ok( id ) => id.to_lowercase()
 	};
 
 	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
@@ -198,6 +225,7 @@ pub(crate) async fn search_file( state: State<AppState>, parsed_field: Field<'_>
 }
 
 pub async fn file_status( state: State<AppState>, Path( id ): Path<String> ) -> Result<Json<serde_json::Value>, ( StatusCode, String )> {
+	let id = id.to_lowercase();
 	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
 
 	let file_name: String  = res.get( "FileName" );
@@ -219,6 +247,7 @@ pub async fn file_status( state: State<AppState>, Path( id ): Path<String> ) -> 
 }
 
 pub async fn delete_file( state: State<AppState>, Path( id ): Path<String> ) -> Result<String, ( StatusCode, String )> {
+	let id = id.to_lowercase();
 	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
 
 	let file_id: String   = res.get( "ID" );
@@ -250,6 +279,7 @@ pub async fn delete_file( state: State<AppState>, Path( id ): Path<String> ) -> 
 }
 
 pub async fn download_file( State( state ): State<AppState>, ConnectInfo( addr ): ConnectInfo<SocketAddr>, Path( id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
+	let id = id.to_lowercase();
 	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
 
 	let file_id: String    = res.get( "ID" );
