@@ -1,7 +1,6 @@
 use std::{
 	net::{
 		IpAddr,
-		SocketAddr,
 	},
 	sync::{
 		LazyLock
@@ -16,7 +15,6 @@ use axum::{
 		Body
 	},
 	extract::{
-		ConnectInfo,
 		Multipart,
 		Path,
 		Query,
@@ -79,6 +77,10 @@ use fs2::{
 	available_space
 };
 
+use real::{
+	RealIp
+};
+
 use crate::{
 	state::{
 		AppState,
@@ -107,7 +109,24 @@ fn generate_file_id() -> String {
 		.join( "-" )
 }
 
-pub(crate) async fn upload_file( State( state ): State<AppState>, ip: IpAddr, mut parsed_field: Field<'_>, is_encrypted: bool ) -> Result<String, ( StatusCode, String )> {
+fn sanitize_filename( raw: &str ) -> Option<String> {
+	let name = std::path::Path::new( raw ).file_name()?.to_str()?;
+
+	if name.is_empty() || name == "." || name == ".." || name.len() > 255 {
+		return None;
+	}
+
+	let is_forbidden = |c: char| {
+		c.is_control() || matches!( c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' )
+	};
+	if name.chars().any( is_forbidden ) {
+		return None;
+	}
+
+	Some( name.to_string() )
+}
+
+pub( crate ) async fn upload_file( State( state ): State<AppState>, ip: IpAddr, mut parsed_field: Field<'_>, is_encrypted: bool ) -> Result<String, ( StatusCode, String )> {
 	let mut file_id = generate_file_id();
 	for _ in 0..5 {
 		let exists = sqlx::query( "SELECT 1 FROM filetable WHERE ID = ?" )
@@ -120,11 +139,12 @@ pub(crate) async fn upload_file( State( state ): State<AppState>, ip: IpAddr, mu
 		file_id = generate_file_id();
 	}
 
-	let file_name = parsed_field.file_name().unwrap_or( "__failure_upload_file()__" ).to_string();
+	let raw_file_name = parsed_field.file_name().unwrap_or( "" ).to_string();
 
-	if file_name == "" || file_name == "__failure_upload_file()__" {
-		return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
-	}
+	let file_name = match sanitize_filename( &raw_file_name ) {
+		Some( name ) => name,
+		None => return Err( ( StatusCode::BAD_REQUEST, "Invalid or unsafe file name.\n".to_string() ) ),
+	};
 
 	if available_space( "./uploads" ).unwrap_or( u64::MAX ) < MINIMUM_FREE_SPACE {
 		return Err( ( StatusCode::SERVICE_UNAVAILABLE, "Server storage is full. Try again later.\n".to_string() ) );
@@ -278,7 +298,7 @@ pub async fn delete_file( state: State<AppState>, Path( id ): Path<String> ) -> 
 	}
 }
 
-pub async fn download_file( State( state ): State<AppState>, ConnectInfo( addr ): ConnectInfo<SocketAddr>, Path( id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
+pub async fn download_file( State( state ): State<AppState>, real_ip: RealIp, Path( id ): Path<String> ) -> Result<Response, ( StatusCode, String )> {
 	let id = id.to_lowercase();
 	let res: SqliteRow = lookup_file_record( &id, &state.database ).await?;
 
@@ -287,7 +307,7 @@ pub async fn download_file( State( state ): State<AppState>, ConnectInfo( addr )
 	let file_size: i64     = res.get( "FileSize" );
 	let is_encrypted: bool = res.get( "IsEncrypted" );
 
-	let ip = addr.ip();
+	let ip = real_ip.ip();
 
 	if state.bandwidth.would_exceed( ip, file_size as u64 ) {
 		return Err( ( StatusCode::TOO_MANY_REQUESTS, "Bandwidth limit exceeded. Try again later.".to_string() ) );
@@ -317,8 +337,8 @@ pub async fn download_file( State( state ): State<AppState>, ConnectInfo( addr )
 	return Ok( response_object );
 }
 
-pub async fn curl_upload_processor( State( state ): State<AppState>, ConnectInfo( addr ): ConnectInfo<SocketAddr>, Query( query ): Query<UploadQuery>, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
-	let ip = addr.ip();
+pub async fn curl_upload_processor( State( state ): State<AppState>, real_ip: RealIp, Query( query ): Query<UploadQuery>, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+	let ip = real_ip.ip();
 	let is_encrypted = query.encrypted.unwrap_or( false );
 
 	if let Some( bytes ) = headers.get( header::CONTENT_LENGTH )
@@ -354,4 +374,50 @@ pub async fn curl_upload_processor( State( state ): State<AppState>, ConnectInfo
 	}
 
 	return Err( ( StatusCode::BAD_REQUEST, "No file found in request".to_string() ) );
+}
+
+#[cfg(test)]
+mod tests {
+	use super::sanitize_filename;
+
+	#[test]
+	fn rejects_path_traversal_and_separators() {
+		assert_eq!( sanitize_filename( "../../../../home/sean/.bashrc" ).as_deref(), Some( ".bashrc" ) );
+		assert_eq!( sanitize_filename( "a/b/c.txt" ).as_deref(), Some( "c.txt" ) );
+		assert_eq!( sanitize_filename( "/etc/passwd" ).as_deref(), Some( "passwd" ) );
+
+		assert_eq!( sanitize_filename( ".." ), None );
+		assert_eq!( sanitize_filename( "." ), None );
+		assert_eq!( sanitize_filename( "" ), None );
+		assert_eq!( sanitize_filename( "/" ), None );
+
+		assert_eq!( sanitize_filename( "..\\..\\evil" ), None );
+	}
+
+	#[test]
+	fn rejects_header_injection_and_control_chars() {
+		assert_eq!( sanitize_filename( "a.txt\r\nX-Evil: 1" ), None );
+
+		assert_eq!( sanitize_filename( "a\".txt" ), None );
+
+		assert_eq!( sanitize_filename( "a\0b" ), None );
+	}
+
+	#[test]
+	fn keeps_normal_filenames_intact() {
+		assert_eq!( sanitize_filename( "report.pdf" ).as_deref(), Some( "report.pdf" ) );
+		assert_eq!( sanitize_filename( "My Vacation (2026).jpg" ).as_deref(), Some( "My Vacation (2026).jpg" ) );
+		assert_eq!( sanitize_filename( "Ubuntu_24.04.iso" ).as_deref(), Some( "Ubuntu_24.04.iso" ) );
+
+		assert_eq!( sanitize_filename( "résumé.txt" ).as_deref(), Some( "résumé.txt" ) );
+	}
+
+	#[test]
+	fn rejects_overlong_names() {
+		let long = "a".repeat( 256 );
+		assert_eq!( sanitize_filename( &long ), None );
+
+		let ok = "a".repeat( 255 );
+		assert_eq!( sanitize_filename( &ok ).as_deref(), Some( ok.as_str() ) );
+	}
 }

@@ -30,7 +30,8 @@ use axum_governor::{
 };
 
 use real::{
-	RealIpLayer
+	IpExtractor,
+	RealIpLayer,
 };
 
 use tower_http::{
@@ -123,7 +124,13 @@ pub fn build_router( state: AppState ) -> Router {
 		)
 		.layer( GovernorLayer::default() )
 		.layer( from_fn( add_retry_after ) )
-		.layer( RealIpLayer::default() )
+
+
+		.layer( RealIpLayer::with_extractor(
+			IpExtractor::default()
+				.with_headers( vec![ "CF-Connecting-IP".to_string() ] )
+				.trust_private_ips( true )
+		) )
 		.layer(
 			CorsLayer::new()
 				.allow_origin(

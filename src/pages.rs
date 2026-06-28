@@ -1,12 +1,5 @@
-use std::{
-	net::{
-		SocketAddr
-	}
-};
-
 use axum::{
 	extract::{
-		ConnectInfo,
 		Multipart,
 		State,
 	},
@@ -21,6 +14,10 @@ use axum::{
 		Redirect,
 		Response,
 	},
+};
+
+use real::{
+	RealIp
 };
 
 use crate::{
@@ -213,8 +210,12 @@ pub async fn html_downloader_form() -> Response {
 	).into_response()
 }
 
-pub async fn html_upload_processor( State( state ): State<AppState>, ConnectInfo( addr ): ConnectInfo<SocketAddr>, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
-	let ip = addr.ip();
+pub async fn html_upload_processor( State( state ): State<AppState>, real_ip: RealIp, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+	if !LOCAL_HTML {
+		return Err( ( StatusCode::NOT_FOUND, "Not found".to_string() ) );
+	}
+
+	let ip = real_ip.ip();
 
 	if let Some( bytes ) = headers.get( header::CONTENT_LENGTH )
 		.and_then( |v| v.to_str().ok() )
@@ -252,6 +253,10 @@ pub async fn html_upload_processor( State( state ): State<AppState>, ConnectInfo
 }
 
 pub async fn html_download_processor( state: State<AppState>, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+	if !LOCAL_HTML {
+		return Err( ( StatusCode::NOT_FOUND, "Not found".to_string() ) );
+	}
+
 	loop {
 		let html_parts = part.next_field().await;
 
