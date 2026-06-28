@@ -1,9 +1,3 @@
-mod state;
-mod handlers;
-mod pages;
-mod cleanup;
-mod router;
-
 use std::{
 	net::{
 		SocketAddr
@@ -45,17 +39,23 @@ use tracing_subscriber::{
 	EnvFilter
 };
 
-use state::{
-	AppState,
-	BandwidthTracker
+use capsule_server::{
+	state::{
+		AppState,
+		BandwidthTracker
+	}
 };
 
-use router::{
-	build_router
+use capsule_server::{
+	router::{
+		build_router
+	}
 };
 
-use cleanup::{
-	spawn_cleanup_task
+use capsule_server::{
+	cleanup::{
+		spawn_cleanup_task
+	}
 };
 
 #[tokio::main]

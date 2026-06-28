@@ -342,7 +342,7 @@ pub async fn download_file( State( state ): State<AppState>, real_ip: RealIp, Pa
 	return Ok( response_object );
 }
 
-pub async fn curl_upload_processor( State( state ): State<AppState>, real_ip: RealIp, Query( query ): Query<UploadQuery>, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
+pub(crate) async fn curl_upload_processor( State( state ): State<AppState>, real_ip: RealIp, Query( query ): Query<UploadQuery>, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
 	let ip = real_ip.ip();
 	let is_encrypted = query.encrypted.unwrap_or( false );
 

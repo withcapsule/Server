@@ -1,191 +1,141 @@
-// Requires the server to be running on localhost:9001
+mod common;
 
-use std::{
-	sync::{
-		OnceLock
-	},
-	time::{
-		Duration
-	}
-};
-
-use tokio::{
-	sync::{
-		Mutex
-	},
-	time::{
-		sleep
-	}
-};
-
-use reqwest::{
-	Client,
-	multipart::{
-		Form,
-		Part
-	}
-};
-
-const BASE_URL: &str = "http://localhost:9001";
-static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn test_lock() -> &'static Mutex<()> {
-	TEST_LOCK.get_or_init( || Mutex::new(()) )
-}
-
-fn make_test_data( size: usize ) -> Vec<u8> { (0..size).map( |i| (i % 256) as u8 ).collect() }
-
-fn parse_file_id( response_body: &str ) -> Option<String> {
-	response_body
-		.split( "File ID for downloading is " )
-		.nth( 1 )
-		.map( |s| s.trim().trim_end_matches( '.' ).trim_end_matches( '\n' ).to_string() )
-}
+use common::{ client, init_limiter, make_test_data, parse_file_id, spawn_server, UNLIMITED };
+use reqwest::multipart::{ Form, Part };
 
 #[tokio::test]
 async fn test_upload_and_download_integrity() {
-	let _guard = test_lock().lock().await;
-	sleep( Duration::from_secs( 2 ) ).await;
+	init_limiter( UNLIMITED ).await;
+	let base = spawn_server().await;
+	let client = client();
 
-	let test_data = make_test_data( 5 * 1024 * 1024 );
-	println!( "-- Upload/download integrity test ({} bytes) --", test_data.len() );
+	let data = make_test_data( 5 * 1024 * 1024 );
+	let form = Form::new().part( "f", Part::bytes( data.clone() ).file_name( "rusttest.bin" ) );
 
-	let client = Client::new();
-
-	let form = Form::new().part( "f", Part::bytes( test_data.clone() ).file_name( "rusttest.bin" ) );
-
-	println!( "  uploading rusttest.bin..." );
-	let upload_res = client
-		.post( format!( "{}/upload", BASE_URL ) )
+	let upload = client
+		.post( format!( "{}/upload", base ) )
 		.multipart( form )
 		.send()
 		.await
-		.expect( "Upload request failed" );
+		.expect( "upload failed" );
+	assert_eq!( upload.status(), 200, "upload did not return 200" );
 
-	println!( "  upload status: {}", upload_res.status() );
-	assert_eq!( upload_res.status(), 200, "Upload did not return 200" );
+	let body = upload.text().await.unwrap();
+	let file_id = parse_file_id( &body ).expect( "could not parse file ID" );
 
-	let body = upload_res.text().await.unwrap();
-	println!( "  server response: {}", body.trim() );
-	let file_id = parse_file_id( &body ).expect( "Could not parse file ID from upload response" );
-	println!( "  parsed file ID: {}", file_id );
-
-	println!( "  downloading file ID {}...", file_id );
-	let dl_res = client
-		.get( format!( "{}/download/{}", BASE_URL, file_id ) )
+	let dl = client
+		.get( format!( "{}/download/{}", base, file_id ) )
 		.send()
 		.await
-		.expect( "Download request failed" );
+		.expect( "download failed" );
+	assert_eq!( dl.status(), 200, "download did not return 200" );
 
-	println!( "  download status: {}", dl_res.status() );
-	assert_eq!( dl_res.status(), 200, "Download did not return 200" );
-
-	let downloaded = dl_res.bytes().await.unwrap();
-	println!( "  downloaded {} bytes", downloaded.len() );
-
-	assert_eq!(
-		downloaded.as_ref(),
-		test_data.as_slice(),
-		"Downloaded data does not match uploaded data"
-	);
-	println!( "  integrity check passed" );
-	println!( "  PASS" );
+	let downloaded = dl.bytes().await.unwrap();
+	assert_eq!( downloaded.as_ref(), data.as_slice(), "downloaded data does not match upload" );
 }
 
 #[tokio::test]
 async fn test_content_disposition_filename() {
-	let _guard = test_lock().lock().await;
-	sleep( Duration::from_secs( 2 ) ).await;
+	init_limiter( UNLIMITED ).await;
+	let base = spawn_server().await;
+	let client = client();
 
-	println!( "-- Content-Disposition filename test --" );
-	let client = Client::new();
+	let form = Form::new().part( "f", Part::bytes( vec![ 0u8; 64 ] ).file_name( "myfile.txt" ) );
 
-	let form = Form::new().part(
-		"f",
-		Part::bytes( vec![ 0u8; 64 ] ).file_name( "myfile.txt" ),
-	);
-
-	println!( "  uploading myfile.txt..." );
-	let upload_res = client
-		.post( format!( "{}/upload", BASE_URL ) )
+	let upload = client
+		.post( format!( "{}/upload", base ) )
 		.multipart( form )
 		.send()
 		.await
-		.unwrap();
+		.expect( "upload failed" );
+	assert_eq!( upload.status(), 200 );
 
-	println!( "  upload status: {}", upload_res.status() );
-	assert_eq!( upload_res.status(), 200, "Upload did not return 200" );
+	let file_id = parse_file_id( &upload.text().await.unwrap() ).expect( "could not parse file ID" );
 
-	let body = upload_res.text().await.unwrap();
-	let file_id = parse_file_id( &body ).expect( "Could not parse file ID" );
-	println!( "  parsed file ID: {}", file_id );
-
-	println!( "  downloading file ID {}...", file_id );
-	let dl_res = client
-		.get( format!( "{}/download/{}", BASE_URL, file_id ) )
+	let dl = client
+		.get( format!( "{}/download/{}", base, file_id ) )
 		.send()
 		.await
-		.unwrap();
+		.expect( "download failed" );
 
-	println!( "  download status: {}", dl_res.status() );
-	let disposition = dl_res
+	let disposition = dl
 		.headers()
 		.get( "content-disposition" )
-		.expect( "No Content-Disposition header" )
+		.expect( "no Content-Disposition header" )
+		.to_str()
+		.unwrap();
+	assert!( disposition.contains( "myfile.txt" ), "unexpected disposition: {}", disposition );
+}
+
+
+
+#[tokio::test]
+async fn test_traversal_filename_is_cleaned_to_basename() {
+	init_limiter( UNLIMITED ).await;
+	let base = spawn_server().await;
+	let client = client();
+
+	let form = Form::new().part(
+		"f",
+		Part::bytes( vec![ 7u8; 32 ] ).file_name( "../../../../etc/evil.txt" ),
+	);
+
+	let upload = client
+		.post( format!( "{}/upload", base ) )
+		.multipart( form )
+		.send()
+		.await
+		.expect( "upload failed" );
+	assert_eq!( upload.status(), 200 );
+
+	let body = upload.text().await.unwrap();
+	let file_id = parse_file_id( &body ).expect( "could not parse file ID" );
+
+	let dl = client
+		.get( format!( "{}/download/{}", base, file_id ) )
+		.send()
+		.await
+		.expect( "download failed" );
+	let disposition = dl
+		.headers()
+		.get( "content-disposition" )
+		.expect( "no Content-Disposition header" )
 		.to_str()
 		.unwrap();
 
-	println!( "  Content-Disposition: {}", disposition );
-	assert!( disposition.contains( "myfile.txt" ), "Content-Disposition does not contain original filename, got: {}", disposition );
-	println!( "  PASS" );
+	assert!( disposition.contains( "evil.txt" ), "expected cleaned basename, got: {}", disposition );
+	assert!( !disposition.contains( ".." ), "filename still contains traversal: {}", disposition );
 }
 
 #[tokio::test]
 async fn test_delete_uploaded_file() {
-	let _guard = test_lock().lock().await;
-	sleep( Duration::from_secs( 2 ) ).await;
+	init_limiter( UNLIMITED ).await;
+	let base = spawn_server().await;
+	let client = client();
 
-	println!( "-- Delete uploaded file test --" );
-	let client = Client::new();
+	let form = Form::new().part( "f", Part::bytes( vec![ 1u8; 64 ] ).file_name( "delete_me.txt" ) );
 
-	let form = Form::new().part(
-		"f",
-		Part::bytes( vec![ 1u8; 64 ] ).file_name( "delete_me.txt" ),
-	);
-
-	println!( "  uploading delete_me.txt..." );
-	let upload_res = client
-		.post( format!( "{}/upload", BASE_URL ) )
+	let upload = client
+		.post( format!( "{}/upload", base ) )
 		.multipart( form )
 		.send()
 		.await
-		.expect( "Upload request failed" );
+		.expect( "upload failed" );
+	assert_eq!( upload.status(), 200 );
 
-	println!( "  upload status: {}", upload_res.status() );
-	assert_eq!( upload_res.status(), 200, "Upload did not return 200" );
+	let file_id = parse_file_id( &upload.text().await.unwrap() ).expect( "could not parse file ID" );
 
-	let body = upload_res.text().await.unwrap();
-	let file_id = parse_file_id( &body ).expect( "Could not parse file ID" );
-	println!( "  parsed file ID: {}", file_id );
-
-	println!( "  deleting file ID {}...", file_id );
-	let delete_res = client
-		.delete( format!( "{}/delete/{}", BASE_URL, file_id ) )
+	let delete = client
+		.delete( format!( "{}/delete/{}", base, file_id ) )
 		.send()
 		.await
-		.expect( "Delete request failed" );
+		.expect( "delete failed" );
+	assert_eq!( delete.status(), 200, "delete did not return 200" );
 
-	println!( "  delete status: {}", delete_res.status() );
-	assert_eq!( delete_res.status(), 200, "Delete did not return 200" );
-
-	println!( "  verifying file ID {} is gone...", file_id );
-	let dl_res = client
-		.get( format!( "{}/download/{}", BASE_URL, file_id ) )
+	let dl = client
+		.get( format!( "{}/download/{}", base, file_id ) )
 		.send()
 		.await
-		.expect( "Download verification request failed" );
-
-	println!( "  post-delete download status: {}", dl_res.status() );
-	assert_eq!( dl_res.status(), 404, "Expected deleted file to return 404" );
-	println!( "  PASS" );
+		.expect( "verification request failed" );
+	assert_eq!( dl.status(), 404, "expected deleted file to be gone" );
 }

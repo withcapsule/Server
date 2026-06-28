@@ -1,15 +1,20 @@
 #[cfg(unix)]
 use libc;
 
+mod common;
+
+use common::{
+    client,
+    cleanup_file_ids,
+    init_limiter,
+    parse_file_id,
+    spawn_server,
+    UNLIMITED,
+};
+
 use std::{
     io::{
         Write
-    },
-    net::{
-        SocketAddr
-    },
-    str::{
-        FromStr
     },
     sync::{
         atomic::{
@@ -28,24 +33,6 @@ use std::{
     }
 };
 
-use capsule_server::{
-    AppState,
-    build_router
-};
-
-use lazy_limit::{
-    init_rate_limiter,
-    Duration as RateDuration,
-    RuleConfig,
-};
-
-use sqlx::{
-    SqlitePool,
-    sqlite::{
-        SqliteConnectOptions
-    }
-};
-
 use reqwest::{
     Client,
     multipart::{
@@ -56,21 +43,12 @@ use reqwest::{
 
 use tokio::{
     spawn,
-    fs::{
-        create_dir_all
-    },
-    net::{
-        TcpListener
-    },
     sync::{
-        Mutex as AsyncMutex,
-        OnceCell
+    	Mutex as AsyncMutex
     }
 };
 
 static TRACING:    std::sync::Once = std::sync::Once::new();
-static TEST_DB_ID: AtomicU32       = AtomicU32::new( 0 );
-static LIMITER_INIT: OnceCell<()>  = OnceCell::const_new();
 static TEST_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
 
 fn init_tracing() {
@@ -109,19 +87,6 @@ fn write_audit( text: &str ) {
 
 fn test_lock() -> &'static AsyncMutex<()> {
     TEST_LOCK.get_or_init( || AsyncMutex::new(()) )
-}
-
-async fn ensure_rate_limiter_initialized() {
-    LIMITER_INIT.get_or_init( || async {
-        init_rate_limiter!(
-            default: RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ),
-            routes: [
-                ( "/upload", RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ) ),
-                ( "/html_upload_processor", RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ) ),
-                ( "/html_download_processor", RuleConfig::new( RateDuration::seconds( 1 ), 1_000_000 ) )
-            ]
-        ).await;
-    } ).await;
 }
 
 struct Stats {
@@ -289,50 +254,6 @@ RESULT    : {}\n\
     write_audit( &entry );
 }
 
-async fn start_test_server() -> String {
-    ensure_rate_limiter_initialized().await;
-
-    let db_id = TEST_DB_ID.fetch_add( 1, Ordering::Relaxed );
-
-    let opts = SqliteConnectOptions::from_str(
-        &format!( "sqlite:file:loadtest_{db_id}?mode=memory&cache=shared" )
-    )
-    .unwrap()
-    .create_if_missing( true );
-
-    let pool = SqlitePool::connect_with( opts ).await.unwrap();
-
-    sqlx::query( "CREATE TABLE IF NOT EXISTS filetable (ID VARCHAR(16) PRIMARY KEY, FileName VARCHAR(64) NOT NULL, UploadTime INTEGER NOT NULL, FileSize INTEGER NOT NULL, IsEncrypted INTEGER NOT NULL DEFAULT 0)" )
-        .execute( &pool ).await.unwrap();
-
-    create_dir_all( "./uploads/temp" ).await.unwrap();
-
-    let state = AppState { database: pool };
-    let app = build_router( state ).into_make_service_with_connect_info::<SocketAddr>();
-
-    let listener = TcpListener::bind( "127.0.0.1:0" ).await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-
-    spawn( async move { axum::serve( listener, app ).await.unwrap(); } );
-
-    format!( "http://127.0.0.1:{}", port )
-}
-
-fn make_client() -> Client {
-    Client::builder()
-        .timeout( Duration::from_secs( 60 ) )
-        .pool_max_idle_per_host( 200 )
-        .build()
-        .unwrap()
-}
-
-fn parse_file_id( body: &str ) -> Option<String> {
-    body.split( "File ID for downloading is " )
-        .nth( 1 )
-        .and_then( |s| s.split( '.' ).next() )
-        .map( |s| s.trim().to_string() )
-}
-
 async fn seed_files( base_url: &str, client: &Client, count: usize, file_size: usize ) -> Vec<String> {
     let mut ids = Vec::with_capacity( count );
     for _ in 0..count {
@@ -355,29 +276,22 @@ async fn seed_files( base_url: &str, client: &Client, count: usize, file_size: u
     ids
 }
 
-async fn cleanup_file_ids( ids: &[String] ) {
-    for id in ids {
-        let _ = tokio::fs::remove_dir_all( format!( "./uploads/temp/{}", id ) ).await;
-    }
-}
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_load_large_file_uploads() {
     let _guard = test_lock().lock().await;
     init_tracing();
+    init_limiter( UNLIMITED ).await;
     const COUNT:     usize    = 50;
     const FILE_SIZE: usize    = 2 * 1024 * 1024;
     const TIME_CONSTRAINT:    Duration = Duration::from_secs( 30 );
 
-    let base_url = start_test_server().await;
+    let base_url = spawn_server().await;
     println!(
         "-- Load test: {} concurrent {}MB uploads in <{}s --",
         COUNT, FILE_SIZE / ( 1024 * 1024 ), TIME_CONSTRAINT.as_secs()
     );
 
-    let client       = Arc::new( make_client() );
+    let client       = Arc::new( client() );
     let stats        = Stats::new();
     let uploaded_ids: Arc<Mutex<Vec<String>>> = Arc::new( Mutex::new( Vec::new() ) );
     let start        = Instant::now();
@@ -441,13 +355,14 @@ async fn test_load_large_file_uploads() {
 async fn test_load_concurrent_downloads() {
     let _guard = test_lock().lock().await;
     init_tracing();
+    init_limiter( UNLIMITED ).await;
     const SEED_COUNT:     usize    = 8;
     const SEED_SIZE:      usize    = 2 * 1024 * 1024;
     const DOWNLOAD_COUNT: usize    = 200;
     const TIME_CONSTRAINT:         Duration = Duration::from_secs( 20 );
 
-    let base_url = start_test_server().await;
-    let client   = Arc::new( make_client() );
+    let base_url = spawn_server().await;
+    let client   = Arc::new( client() );
 
     println!(
         "-- Seeding {} files of {}MB --",
@@ -513,14 +428,15 @@ async fn test_load_concurrent_downloads() {
 async fn test_load_mixed_upload_download() {
     let _guard = test_lock().lock().await;
     init_tracing();
+    init_limiter( UNLIMITED ).await;
     const SEED_COUNT:  usize    = 10;
     const SEED_SIZE:   usize    = 1 * 1024 * 1024;
     const UPLOAD_SIZE: usize    = 1 * 1024 * 1024;
     const CONCURRENT:  usize    = 100;
     const TIME_CONSTRAINT:      Duration = Duration::from_secs( 25 );
 
-    let base_url = start_test_server().await;
-    let client   = Arc::new( make_client() );
+    let base_url = spawn_server().await;
+    let client   = Arc::new( client() );
 
     println!(
         "-- Seeding {} files of {}MB for mixed test --",
@@ -612,13 +528,14 @@ async fn test_load_mixed_upload_download() {
 async fn test_load_sustained_throughput() {
     let _guard = test_lock().lock().await;
     init_tracing();
+    init_limiter( UNLIMITED ).await;
     const WAVES:            usize    = 4;
     const UPLOADS_PER_WAVE: usize    = 50;
     const FILE_SIZE:        usize    = 1 * 1024 * 1024;
     const TIME_CONSTRAINT:           Duration = Duration::from_secs( 45 );
 
-    let base_url     = start_test_server().await;
-    let client       = Arc::new( make_client() );
+    let base_url     = spawn_server().await;
+    let client       = Arc::new( client() );
     let total_stats  = Stats::new();
     let all_ids: Arc<Mutex<Vec<String>>> = Arc::new( Mutex::new( Vec::new() ) );
     let overall_start = Instant::now();

@@ -1,78 +1,99 @@
-// Requires the server to be running on localhost:9001
+mod common;
 
-const BASE_URL: &str = "http://localhost:9001";
+use common::{ client, init_limiter, spawn_server, UNLIMITED };
+use reqwest::multipart::{ Form, Part };
 
 #[tokio::test]
 async fn test_download_nonexistent_id_returns_404() {
-	println!( "-- GET /download/notanid (expect 404) --" );
-	let client = reqwest::Client::new();
+	init_limiter( UNLIMITED ).await;
+	let base = spawn_server().await;
 
-	let res = client
-		.get( format!( "{}/download/notanid", BASE_URL ) )
+	let res = client()
+		.get( format!( "{}/download/notanid", base ) )
 		.send()
 		.await
-		.expect( "Request failed" );
+		.expect( "request failed" );
 
-	println!( "  status: {}", res.status() );
 	assert_eq!( res.status(), 404 );
-	println!( "  PASS" );
+}
+
+#[tokio::test]
+async fn test_status_nonexistent_id_returns_404() {
+	init_limiter( UNLIMITED ).await;
+	let base = spawn_server().await;
+
+	let res = client()
+		.get( format!( "{}/status/notanid", base ) )
+		.send()
+		.await
+		.expect( "request failed" );
+
+	assert_eq!( res.status(), 404 );
 }
 
 #[tokio::test]
 async fn test_upload_no_file_returns_400() {
-	println!( "-- POST /upload with empty form (expect 400) --" );
-	let client = reqwest::Client::new();
+	init_limiter( UNLIMITED ).await;
+	let base = spawn_server().await;
 
-	let form = reqwest::multipart::Form::new();
-
-	let res = client
-		.post( format!( "{}/upload", BASE_URL ) )
-		.multipart( form )
+	let res = client()
+		.post( format!( "{}/upload", base ) )
+		.multipart( Form::new() )
 		.send()
 		.await
-		.expect( "Request failed" );
+		.expect( "request failed" );
 
-	println!( "  status: {}", res.status() );
 	assert_eq!( res.status(), 400 );
-	println!( "  PASS" );
 }
 
+
 #[tokio::test]
-async fn test_search_nonexistent_id_returns_404() {
-	println!( "-- POST /html_download_processor with bad ID (expect 404) --" );
-	let client = reqwest::Client::new();
+async fn test_upload_unsafe_filename_returns_400() {
+	init_limiter( UNLIMITED ).await;
+	let base = spawn_server().await;
 
-	let form = reqwest::multipart::Form::new()
-		.text( "file_download_field", "notanid" );
+	let form = Form::new().part( "f", Part::bytes( vec![ 0u8; 16 ] ).file_name( ".." ) );
 
-	let res = client
-		.post( format!( "{}/html_download_processor", BASE_URL ) )
+	let res = client()
+		.post( format!( "{}/upload", base ) )
 		.multipart( form )
 		.send()
 		.await
-		.expect( "Request failed" );
+		.expect( "request failed" );
 
-	println!( "  status: {}", res.status() );
-	assert_eq!( res.status(), 404, "Expected 404, got {}", res.status() );
-	println!( "  PASS" );
+	assert_eq!( res.status(), 400 );
+}
+
+
+#[tokio::test]
+async fn test_html_download_processor_gated_returns_404() {
+	init_limiter( UNLIMITED ).await;
+	let base = spawn_server().await;
+
+	let form = Form::new().text( "file_download_field", "notanid" );
+
+	let res = client()
+		.post( format!( "{}/html_download_processor", base ) )
+		.multipart( form )
+		.send()
+		.await
+		.expect( "request failed" );
+
+	assert_eq!( res.status(), 404 );
 }
 
 #[tokio::test]
 async fn test_ping() {
-	println!( "-- GET /ping (expect 200 + pong) --" );
-	let client = reqwest::Client::new();
+	init_limiter( UNLIMITED ).await;
+	let base = spawn_server().await;
 
-	let res = client
-		.get( format!( "{}/ping", BASE_URL ) )
+	let res = client()
+		.get( format!( "{}/ping", base ) )
 		.send()
 		.await
-		.expect( "Request failed" );
+		.expect( "request failed" );
 
-	println!( "  status: {}", res.status() );
 	assert_eq!( res.status(), 200 );
-
 	let body = res.text().await.unwrap();
-	println!( "  body: {}", body.trim() );
-	assert!( body.contains( "pong" ), "Expected pong in response, got: {}", body );
-	println!( "  PASS" );
+	assert!( body.contains( "pong" ), "expected pong, got: {}", body );
 }

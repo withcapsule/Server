@@ -1,164 +1,95 @@
-// Requires the server to be running on localhost:9001
-// rate limiter state is per-IP and shared with the live server
+mod common;
 
-use std::{
-	sync::{
-		OnceLock
-	},
-	time::{
-		Duration
-	}
-};
+use common::{ client, init_limiter, spawn_server };
+use reqwest::multipart::{ Form, Part };
 
-use tokio::{
-	sync::{
-		Mutex
-	},
-	time::{
-		sleep
-	}
-};
-
-use reqwest::{
-	Client,
-	multipart::{
-		Form,
-		Part
-	}
-};
-
-const BASE_URL: &str = "http://localhost:9001";
-static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn test_lock() -> &'static Mutex<()> {
-	TEST_LOCK.get_or_init( || Mutex::new(()) )
-}
+const RATE_LIMIT_PER_SEC: u32 = 1;
 
 #[tokio::test]
 async fn test_upload_route_rate_limited() {
-	let _guard = test_lock().lock().await;
-	println!( "-- Upload route per-IP rate limit test (limit: 2 req/s, sending 10) --" );
-	let client = Client::new();
+	init_limiter( RATE_LIMIT_PER_SEC ).await;
+	let base = spawn_server().await;
+	let client = client();
 
-	let mut allowed = 0u32;
-	let mut rate_limited = 0u32;
-
-	for i in 1..=10 {
-		let form = Form::new().part(
-			"f",
-			Part::bytes( vec![ 0u8; 64 ] ).file_name( "ratelimitfile.bin" ),
-		);
-
+	let mut rate_limited = 0;
+	for _ in 0..10 {
+		let form = Form::new().part( "f", Part::bytes( vec![ 0u8; 64 ] ).file_name( "rl.bin" ) );
 		let res = client
-			.post( format!( "{}/upload", BASE_URL ) )
+			.post( format!( "{}/upload", base ) )
 			.multipart( form )
 			.send()
 			.await
-			.expect( "Request failed" );
-
-		let status = res.status();
-		println!( "  request {}: HTTP {}", i, status );
-
-		if status == 429 { rate_limited += 1; } else { allowed += 1; };
+			.expect( "request failed" );
+		if res.status() == 429 { rate_limited += 1; }
 	}
 
-	println!( "  allowed: {}  |  rate limited: {}", allowed, rate_limited );
-	assert!( rate_limited > 0, "Expected some per-IP requests to be rate limited (429), but none were" );
-	println!( "  PASS" );
+	assert!( rate_limited > 0, "expected some requests to be rate limited (429)" );
 }
 
 #[tokio::test]
-async fn test_per_ip_default_rate_limit() {
-	let _guard = test_lock().lock().await;
-	println!( "-- Per-IP default rate limit test (limit: 20 req/s, sending 30) --" );
-	let client = Client::new();
+async fn test_default_route_rate_limited() {
+	init_limiter( RATE_LIMIT_PER_SEC ).await;
+	let base = spawn_server().await;
+	let client = client();
 
-	let mut allowed = 0u32;
-	let mut rate_limited = 0u32;
-
-	for i in 1..=30 {
+	let mut rate_limited = 0;
+	for _ in 0..20 {
 		let res = client
-			.get( format!( "{}/ping", BASE_URL ) )
+			.get( format!( "{}/ping", base ) )
 			.send()
 			.await
-			.expect( "Request failed" );
-
-		let status = res.status();
-		println!( "  request {}: HTTP {}", i, status );
-
-		if status == 429 { rate_limited += 1; } else { allowed += 1; };
+			.expect( "request failed" );
+		if res.status() == 429 { rate_limited += 1; }
 	}
 
-	println!( "  allowed: {}  |  rate limited: {}", allowed, rate_limited );
-	assert!( rate_limited > 0, "Expected some per-IP requests to be rate limited (429), but none were" );
-	println!( "  PASS" );
+	assert!( rate_limited > 0, "expected some requests to be rate limited (429)" );
 }
 
 #[tokio::test]
-async fn test_download_processor_rate_limited() {
-	let _guard = test_lock().lock().await;
-	sleep( Duration::from_secs( 1 ) ).await;
-	println!( "-- Download processor per-IP rate limit test (limit: 2 req/s, sending 10) --" );
-	let client = Client::new();
+async fn test_status_route_rate_limited() {
+	init_limiter( RATE_LIMIT_PER_SEC ).await;
+	let base = spawn_server().await;
+	let client = client();
 
-	let mut allowed = 0u32;
-	let mut rate_limited = 0u32;
-
-	for i in 1..=10 {
-		let form = Form::new()
-			.text( "file_download_field", "nonexistent_id" );
-
+	let mut rate_limited = 0;
+	for _ in 0..10 {
 		let res = client
-			.post( format!( "{}/html_download_processor", BASE_URL ) )
-			.multipart( form )
+			.get( format!( "{}/status/someid", base ) )
 			.send()
 			.await
-			.expect( "Request failed" );
-
-		let status = res.status();
-		println!( "  request {}: HTTP {}", i, status );
-
-		if status == 429 { rate_limited += 1; } else { allowed += 1; };
+			.expect( "request failed" );
+		if res.status() == 429 { rate_limited += 1; }
 	}
 
-	println!( "  allowed: {}  |  rate limited: {}", allowed, rate_limited );
-	assert!( rate_limited > 0, "Expected some requests to be rate limited (429), but none were" );
-	println!( "  PASS" );
+	assert!( rate_limited > 0, "expected some requests to be rate limited (429)" );
 }
 
 #[tokio::test]
 async fn test_retry_after_header_on_429() {
-	let _guard = test_lock().lock().await;
-	sleep( Duration::from_secs( 1 ) ).await;
-	println!( "-- Retry-After header present on 429 responses --" );
-	let client = Client::new();
+	init_limiter( RATE_LIMIT_PER_SEC ).await;
+	let base = spawn_server().await;
+	let client = client();
 
-	let mut got_429_with_header = false;
-
-	for _ in 1..=10 {
-		let form = Form::new().text( "file_download_field", "nonexistent_id" );
-
+	let mut checked = false;
+	for _ in 0..10 {
 		let res = client
-			.post( format!( "{}/html_download_processor", BASE_URL ) )
-			.multipart( form )
+			.get( format!( "{}/download/retrycheck", base ) )
 			.send()
 			.await
-			.expect( "Request failed" );
+			.expect( "request failed" );
 
 		if res.status() == 429 {
-			let retry_after = res.headers().get( "retry-after" );
-			assert!( retry_after.is_some(), "429 response missing Retry-After header" );
-
-			let value = retry_after.unwrap().to_str().expect( "Retry-After value not valid UTF-8" );
-			println!( "  Retry-After: {}", value );
-			assert_eq!( value, "1", "Expected Retry-After: 1, got: {}", value );
-
-			got_429_with_header = true;
-
+			let retry_after = res
+				.headers()
+				.get( "retry-after" )
+				.expect( "429 response missing Retry-After header" )
+				.to_str()
+				.expect( "Retry-After not valid UTF-8" );
+			assert_eq!( retry_after, "1", "expected Retry-After: 1, got: {}", retry_after );
+			checked = true;
 			break;
 		}
 	}
 
-	assert!( got_429_with_header, "Never received a 429 response to check Retry-After on" );
-	println!( "  PASS" );
+	assert!( checked, "never received a 429 to check Retry-After on" );
 }
