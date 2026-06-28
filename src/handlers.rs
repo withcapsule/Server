@@ -150,7 +150,8 @@ pub( crate ) async fn upload_file( State( state ): State<AppState>, ip: IpAddr, 
 		return Err( ( StatusCode::SERVICE_UNAVAILABLE, "Server storage is full. Try again later.\n".to_string() ) );
 	}
 
-	info!( file_name, file_id, "upload started" );
+	// info!( file_name, file_id, "upload started" );
+	info!( encrypted = is_encrypted, "upload started" );
 	create_dir_all( format!( "./uploads/temp/{}", file_id ) ).await.unwrap();
 	let path = format!( "./uploads/temp/{}/{}", file_id, file_name );
 
@@ -187,7 +188,8 @@ pub( crate ) async fn upload_file( State( state ): State<AppState>, ip: IpAddr, 
 		total_bytes_written += bytes.len();
 	}
 
-	info!( file_name, file_id, bytes = total_bytes_written, chunks = chunk_loops - 1, "upload complete" );
+	// info!( file_name, file_id, bytes = total_bytes_written, chunks = chunk_loops - 1, "upload complete" );
+	info!( bytes = total_bytes_written, chunks = chunk_loops - 1, encrypted = is_encrypted, "upload complete" );
 
 	if let Err( error_message ) = sqlx::query( "INSERT INTO filetable(ID, FileName, UploadTime, FileSize, IsEncrypted) VALUES(?, ?, ?, ?, ?)" )
 		.bind( &file_id )
@@ -228,14 +230,15 @@ pub(crate) async fn search_file( state: State<AppState>, parsed_field: Field<'_>
 
 	let file_id: String = res.get( "ID" );
 	let file_name: String = res.get( "FileName" );
-	let upload_time: i64 = res.get( "UploadTime" );
+	let _upload_time: i64 = res.get( "UploadTime" );
 
 	let file_exists: bool = match try_exists( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await {
 		Err( error_msg ) => { return Err( ( StatusCode::NOT_FOUND, format!( "File not found, error: {:?}", error_msg ) ) ); }
 		Ok( file ) => file
 	};
 
-	info!( file_id, file_name, upload_time, "file lookup" );
+	// info!( file_id, file_name, upload_time, "file lookup" );
+	info!( "file lookup" );
 
 	if file_exists {
 		return Ok( format!( "File {} found!", file_name  ) );
@@ -290,7 +293,8 @@ pub async fn delete_file( state: State<AppState>, Path( id ): Path<String> ) -> 
 		return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "file {} deleted but database entry still exists. details: {}", file_id, error ) ) );
 	}
 
-	info!( file_id, file_name, "file deleted" );
+	// info!( file_id, file_name, "file deleted" );
+	info!( "file deleted" );
 
 	match remove_dir( format!( "./uploads/temp/{}", file_id ) ).await {
 		Ok(()) => Ok( format!( "File {} deleted", file_name ) ),
@@ -313,7 +317,8 @@ pub async fn download_file( State( state ): State<AppState>, real_ip: RealIp, Pa
 		return Err( ( StatusCode::TOO_MANY_REQUESTS, "Bandwidth limit exceeded. Try again later.".to_string() ) );
 	}
 
-	info!( file_id, file_name, file_size, is_encrypted, "download started" );
+	// info!( file_id, file_name, file_size, is_encrypted, "download started" );
+	info!( bytes = file_size, encrypted = is_encrypted, "download started" );
 
 	let file_to_send = match File::open( format!( "./uploads/temp/{}/{}", file_id, file_name ) ).await {
 		Err( error_msg ) => { return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "unable to open file, details: {}", error_msg ) ) ) }
