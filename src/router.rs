@@ -1,5 +1,14 @@
+use std::{
+	time::{
+		Duration
+	}
+};
+
 use axum::{
 	Router,
+	error_handling::{
+		HandleErrorLayer
+	},
 	extract::{
 		DefaultBodyLimit,
 		Request,
@@ -29,6 +38,17 @@ use axum_governor::{
 	GovernorLayer
 };
 
+use tower::{
+	BoxError,
+	ServiceBuilder,
+	limit::{
+		GlobalConcurrencyLimitLayer
+	},
+	load_shed::{
+		LoadShedLayer
+	},
+};
+
 use real::{
 	IpExtractor,
 	RealIpLayer,
@@ -37,6 +57,9 @@ use real::{
 use tower_http::{
 	cors::{
 		CorsLayer
+	},
+	timeout::{
+		TimeoutLayer
 	},
 	trace::{
 		DefaultMakeSpan,
@@ -77,6 +100,9 @@ use crate::{
 
 const ANDROID_APP_LINKS_SHA256: &str = "40:28:8B:97:8A:02:82:BC:85:CC:EA:A6:4F:36:E2:FA:09:B3:62:F7:FA:38:F3:60:54:A8:69:9E:BC:2C:B3:D5";
 
+const MAX_CONCURRENT_REQUESTS: usize = 256;
+const REQUEST_TIMEOUT_SECS: u64 = 600;
+
 pub async fn add_retry_after( request: Request, next: Next ) -> Response {
 	let response = next.run( request ).await;
 	if response.status() == StatusCode::TOO_MANY_REQUESTS {
@@ -116,7 +142,7 @@ pub fn build_router( state: AppState ) -> Router {
 		.route( "/html_download_processor", post( html_download_processor ) )
 		.route( "/", get( main_menu ) )
 		.with_state( state )
-		.layer( DefaultBodyLimit::max( 1 * 1024 * 1024 * 256 ) )
+		.layer( DefaultBodyLimit::max( 100 * 1024 * 1024 ) )
 		.layer(
 			TraceLayer::new_for_http()
 				.make_span_with( DefaultMakeSpan::new().level( tracing::Level::INFO ) )
@@ -131,6 +157,17 @@ pub fn build_router( state: AppState ) -> Router {
 				.with_headers( vec![ "CF-Connecting-IP".to_string() ] )
 				.trust_private_ips( true )
 		) )
+
+
+		.layer( TimeoutLayer::with_status_code( StatusCode::REQUEST_TIMEOUT, Duration::from_secs( REQUEST_TIMEOUT_SECS ) ) )
+		.layer(
+			ServiceBuilder::new()
+				.layer( HandleErrorLayer::new( |_: BoxError| async {
+					StatusCode::SERVICE_UNAVAILABLE
+				} ) )
+				.layer( LoadShedLayer::new() )
+				.layer( GlobalConcurrencyLimitLayer::new( MAX_CONCURRENT_REQUESTS ) )
+		)
 		.layer(
 			CorsLayer::new()
 				.allow_origin(

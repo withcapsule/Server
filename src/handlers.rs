@@ -152,7 +152,9 @@ pub( crate ) async fn upload_file( State( state ): State<AppState>, ip: IpAddr, 
 
 	// info!( file_name, file_id, "upload started" );
 	info!( encrypted = is_encrypted, "upload started" );
-	create_dir_all( format!( "./uploads/temp/{}", file_id ) ).await.unwrap();
+	if let Err( error_message ) = create_dir_all( format!( "./uploads/temp/{}", file_id ) ).await {
+		return Err( ( StatusCode::INTERNAL_SERVER_ERROR, format!( "Failed to prepare storage, error: {}", error_message ) ) );
+	}
 	let path = format!( "./uploads/temp/{}/{}", file_id, file_name );
 
 	let file = File::create( path ).await;
@@ -167,7 +169,7 @@ pub( crate ) async fn upload_file( State( state ): State<AppState>, ip: IpAddr, 
 
 	let upload_time: u64 = match SystemTime::now().duration_since( SystemTime::UNIX_EPOCH ) {
 		Ok( time ) => time.as_secs(),
-		Err( error_message ) => panic!( "Critical system time issue, possibly before UNIX_EPOCH. Details: {}", error_message ),
+		Err( _ ) => return Err( ( StatusCode::INTERNAL_SERVER_ERROR, "Server clock error.\n".to_string() ) ),
 	};
 
 	loop {
@@ -336,10 +338,12 @@ pub async fn download_file( State( state ): State<AppState>, real_ip: RealIp, Pa
 		.header( "Content-Length", file_size )
 		.header( "Content-Disposition", format!( "attachment; filename=\"{}\"", file_name ) )
 		.header( "X-Encrypted", if is_encrypted { "true" } else { "false" } )
-		.body( file_body )
-		.unwrap();
+		.body( file_body );
 
-	return Ok( response_object );
+	match response_object {
+		Ok( response ) => return Ok( response ),
+		Err( _ ) => return Err( ( StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response.\n".to_string() ) ),
+	}
 }
 
 pub(crate) async fn curl_upload_processor( State( state ): State<AppState>, real_ip: RealIp, Query( query ): Query<UploadQuery>, headers: HeaderMap, mut part: Multipart ) -> Result<String, ( StatusCode, String )> {
